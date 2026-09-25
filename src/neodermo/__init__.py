@@ -48,6 +48,9 @@ def create_app(config_name: str | None = None) -> Flask:
 
     # Import the models package so later table classes register on db.
     from neodermo import models  # noqa: F401
+    from neodermo.api.health import bp as health_bp
+
+    app.register_blueprint(health_bp, url_prefix="/api")
 
     return app
 

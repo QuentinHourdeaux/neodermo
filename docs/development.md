@@ -59,7 +59,7 @@ flask run --port 5000
 pytest
 ```
 
-`pip install -e ".[dev]"` and `flask --app neodermo:create_app run --port 5000` are runnable now. The app has no routes yet. Health, migrate, and pytest land next.
+`pip install -e ".[dev]"` and `flask --app neodermo:create_app run --port 5000` are runnable now. `GET /api/health` reports database connectivity. Migrate scaffolding and pytest land next.
 
 `GET /api/health` is the first HTTP contract. It must report database connectivity and must not return secrets or paths.
 
