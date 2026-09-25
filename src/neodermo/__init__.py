@@ -40,8 +40,7 @@ def create_app(config_name: str | None = None) -> Flask:
                 "Copy .env.example to .env."
             )
         app.config["SECRET_KEY"] = secret_key
-        app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-        _ensure_sqlite_parent(database_url)
+        app.config["SQLALCHEMY_DATABASE_URI"] = _resolve_sqlite_url(database_url)
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -55,15 +54,21 @@ def create_app(config_name: str | None = None) -> Flask:
     return app
 
 
-def _ensure_sqlite_parent(database_url: str) -> None:
-    """Create the directory for a file-backed SQLite URL if needed."""
+def _resolve_sqlite_url(database_url: str) -> str:
+    """Make file-backed SQLite URLs absolute and create their directory.
+
+    Relative paths are resolved from the repo root so the Flask CLI and
+    Alembic open the same file regardless of the process working directory.
+    """
     prefix = "sqlite:///"
     if not database_url.startswith(prefix):
-        return
+        return database_url
     raw_path = database_url.removeprefix(prefix)
     if raw_path == ":memory:":
-        return
+        return database_url
     path = Path(raw_path)
     if not path.is_absolute():
         path = PROJECT_ROOT / path
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{path}"

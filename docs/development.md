@@ -59,7 +59,7 @@ flask run --port 5000
 pytest
 ```
 
-`pip install -e ".[dev]"` and `flask --app neodermo:create_app run --port 5000` are runnable now. `GET /api/health` reports database connectivity. Migrate scaffolding and pytest land next.
+`pip install -e ".[dev]"`, `flask --app neodermo:create_app run --port 5000`, and `flask --app neodermo:create_app db upgrade` are runnable now. There is no domain migration yet; upgrade is a no-op that still opens SQLite. pytest isolation checks land next.
 
 `GET /api/health` is the first HTTP contract. It must report database connectivity and must not return secrets or paths.
 
