@@ -1,6 +1,6 @@
 # Development
 
-These conventions come with the initial Flask foundation. The installable package, factory, migrations, and pytest suite are part of that same ongoing work. Commands below are the target interface; they are not runnable until that package exists. Coding style, docstrings, and environment rules are in [guidelines.md](guidelines.md).
+Layout, layering, and the commands that work on a fresh clone. Coding style, docstrings, and environment rules are in [guidelines.md](guidelines.md).
 
 ## Layout
 
@@ -43,25 +43,43 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 - Tests must use a separate database path. `pytest` must never create or modify the configured runtime database.
 - Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration lands with the Patient / Wound / Assessment schema. Session authentication later uses this `SECRET_KEY` and factory.
 
-## Target commands
+## Local commands
 
-Use Python 3.12+ and a virtualenv at `.venv`. macOS system Python is 3.9 and is not enough. Run Flask on port 5000 once the application factory exists.
+Use Python 3.12 or newer. The macOS system `python3` is 3.9 and will not work. On this machine: `brew install python@3.12`.
+
+`flask` and `pytest` are installed **inside** `.venv`, not globally. A new terminal does not remember `source .venv/bin/activate`. Either activate again, or call `.venv/bin/flask` and `.venv/bin/pytest`.
 
 ```sh
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# set SECRET_KEY and DATABASE_URL in .env
-export FLASK_APP=neodermo:create_app
-flask db upgrade
-flask run --port 5000
+# replace SECRET_KEY in .env with a local random string
+```
+
+Then, with the venv still active:
+
+```sh
+flask --app neodermo:create_app db upgrade
+flask --app neodermo:create_app run --port 5000
+```
+
+`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. There is no domain migration yet; `db upgrade` opens SQLite and applies nothing. Do not run `flask db init` again; `migrations/` already exists.
+
+In another terminal (activate the venv first):
+
+```sh
 pytest
 ```
 
-`pip install -e ".[dev]"`, `flask --app neodermo:create_app run --port 5000`, `flask --app neodermo:create_app db upgrade`, and `pytest` are runnable now. There is no domain migration yet; upgrade is a no-op that still opens SQLite.
+Without activating:
 
-`GET /api/health` is the first HTTP contract. It must report database connectivity and must not return secrets or paths.
+```sh
+.venv/bin/pytest
+.venv/bin/flask --app neodermo:create_app run --port 5000
+```
+
+`GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
 
 ## Adding work later
 

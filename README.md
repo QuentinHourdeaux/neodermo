@@ -27,4 +27,15 @@ v0.1 runs locally in a desktop browser. That is a time-box, not a product change
 
 ## Local commands
 
-Install, migrate, run, and test commands are in [docs/development.md](docs/development.md). They become runnable once the Flask package exists.
+Python 3.12+ and a project virtualenv. Details and notes are in [docs/development.md](docs/development.md).
+
+```sh
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+flask --app neodermo:create_app db upgrade
+flask --app neodermo:create_app run --port 5000
+```
+
+Then `GET http://127.0.0.1:5000/api/health`. In a new terminal, `source .venv/bin/activate` again before `pytest`, or run `.venv/bin/pytest`.

@@ -11,7 +11,7 @@ Neodermo is a mobile-first wound-care journal and a Python/Flask learning projec
 
 ## Local checks
 
-See [docs/development.md](docs/development.md) for the intended install, run, migrate, and pytest commands. Those commands are not runnable until the Flask package exists.
+See [docs/development.md](docs/development.md) for install, run, migrate, and pytest. Use the project `.venv`; `pytest` is not a global command.
 
 ## Working rules
 
