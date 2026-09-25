@@ -10,7 +10,6 @@ README.md
 pyproject.toml
 .gitignore
 .env.example
-src/neodermo/__init__.py
 docs/v0.1-spec.md
 docs/development.md
 docs/guidelines.md
@@ -60,7 +59,7 @@ flask run --port 5000
 pytest
 ```
 
-`pip install -e ".[dev]"` is runnable now and makes `import neodermo` work. The migrate, run, and pytest commands land with the factory, health route, and tests.
+`pip install -e ".[dev]"` and `flask --app neodermo:create_app run --port 5000` are runnable now. The app has no routes yet. Health, migrate, and pytest land next.
 
 `GET /api/health` is the first HTTP contract. It must report database connectivity and must not return secrets or paths.
 
