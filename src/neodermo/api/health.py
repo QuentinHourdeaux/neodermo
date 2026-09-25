@@ -2,7 +2,7 @@
 
 from flask import Blueprint
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DatabaseError
 
 from neodermo.extensions import db
 
@@ -24,5 +24,8 @@ def health() -> tuple[dict[str, str], int]:
     """Return database connectivity without exposing configuration."""
     try:
         return check_database(), 200
-    except OperationalError:
+    except DatabaseError:
+        # OperationalError (unreachable file) and DatabaseError (corrupt
+        # file) both belong here. A narrower catch lets Flask's debugger
+        # return HTML with paths when DEBUG is on.
         return {"status": "unavailable", "database": "error"}, 503

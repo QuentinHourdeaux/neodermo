@@ -23,9 +23,7 @@ def test_health_fails_when_database_unavailable(client):
     ):
         response = client.get("/api/health")
 
-    assert response.status_code == 503
-    assert response.get_json() == {"status": "unavailable", "database": "error"}
-    assert "sqlite" not in response.get_data(as_text=True)
+    _assert_safe_unavailable(response)
     assert "down" not in response.get_data(as_text=True)
 
 
@@ -39,12 +37,37 @@ def test_testing_config_ignores_runtime_database_url(monkeypatch):
     assert app.config["SECRET_KEY"] == "test"
 
 
+def test_health_fails_when_database_is_corrupt(tmp_path, monkeypatch):
+    corrupt = tmp_path / "corrupt.sqlite"
+    corrupt.write_bytes(b"this is not a sqlite database")
+    before_runtime = _snapshot(RUNTIME_DB)
+
+    monkeypatch.setenv("SECRET_KEY", "test")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{corrupt}")
+
+    app = create_app("development")
+    response = app.test_client().get("/api/health")
+
+    _assert_safe_unavailable(response)
+    assert _snapshot(RUNTIME_DB) == before_runtime
+
+
 def test_pytest_does_not_touch_runtime_database(client):
     before = _snapshot(RUNTIME_DB)
 
     client.get("/api/health")
 
     assert _snapshot(RUNTIME_DB) == before
+
+
+def _assert_safe_unavailable(response):
+    assert response.status_code == 503
+    assert response.get_json() == {"status": "unavailable", "database": "error"}
+    body = response.get_data(as_text=True)
+    assert "sqlite" not in body
+    assert "Traceback" not in body
+    assert "<!doctype" not in body.lower()
+    assert str(RUNTIME_DB) not in body
 
 
 def _snapshot(path):
