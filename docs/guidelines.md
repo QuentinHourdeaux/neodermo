@@ -9,6 +9,8 @@ in the repository.
 
 ## Style
 
+- Use Python 3.12 or newer. The macOS system `python3` is 3.9 and is not
+  supported.
 - Follow PEP 8: `snake_case` modules, functions, and variables; `PascalCase`
   classes; 4-space indent.
 - Prefer type hints on public functions and anything with a non-obvious

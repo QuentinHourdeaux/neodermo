@@ -10,6 +10,7 @@ README.md
 pyproject.toml
 .gitignore
 .env.example
+src/neodermo/__init__.py
 docs/v0.1-spec.md
 docs/development.md
 docs/guidelines.md
@@ -45,10 +46,10 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 
 ## Target commands
 
-Use a virtualenv at `.venv`. Run Flask on port 5000.
+Use Python 3.12+ and a virtualenv at `.venv`. macOS system Python is 3.9 and is not enough. Run Flask on port 5000 once the application factory exists.
 
 ```sh
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
@@ -58,6 +59,8 @@ flask db upgrade
 flask run --port 5000
 pytest
 ```
+
+`pip install -e ".[dev]"` is runnable now and makes `import neodermo` work. The migrate, run, and pytest commands land with the factory, health route, and tests.
 
 `GET /api/health` is the first HTTP contract. It must report database connectivity and must not return secrets or paths.
 
