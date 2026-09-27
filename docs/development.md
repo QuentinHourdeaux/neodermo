@@ -16,7 +16,7 @@ docs/guidelines.md
 src/neodermo/__init__.py          # create_app
 src/neodermo/config.py
 src/neodermo/extensions.py        # db = SQLAlchemy()
-src/neodermo/models/__init__.py   # empty until the first schema
+src/neodermo/models/               # establishment, patient, stay, wound, assessment, findings
 src/neodermo/api/health.py
 migrations/                       # Flask-Migrate / Alembic
 tests/conftest.py
@@ -41,7 +41,14 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 - Read `SECRET_KEY` and `DATABASE_URL` from the environment. Commit `.env.example`, never a real `.env`.
 - Runtime SQLite and later private uploads live under `var/`. Do not put care data in `static/` or Git.
 - Tests must use a separate database path. `pytest` must never create or modify the configured runtime database.
-- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration lands with the Patient / Wound / Assessment schema. Session authentication later uses this `SECRET_KEY` and factory.
+- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, Assessment, and AssessmentFinding. Session authentication later uses this `SECRET_KEY` and factory.
+- SQLite foreign keys are enabled on every connection. A stay has one patient and one establishment. `start_date` is required; `end_date = NULL` marks an ongoing stay. A partial unique index permits at most one ongoing stay per patient, and a check rejects an end date before its start date.
+- Patient `name` is one required text field. Surrounding whitespace is trimmed, and blank names are rejected.
+- Room, bed, and service are optional free-text context on PatientStay, not separate records or unique assignments. Several patients may have the same establishment, room, and bed. Blank location input is stored as `NULL`.
+- Changing room, bed, or service updates PatientStay without changing Patient or its wound history. A transfer ends one stay and starts another at the new establishment; the old stay remains. The later API must make that change atomically.
+- A wound is open when `closed_at` is `NULL`. The later write APIs must set a server UTC timestamp when closing, clear it when reopening, reject new assessments while closed, and preserve earlier history. This schema PR adds no care-data routes.
+- Optional clinical fields are `NULL` when not recorded, except patient allergies: the non-null `allergies` text is empty when there are no allergies. `infection = false` means an explicit no, not missing data. Three assessment finding groups are stored as category/value rows so each may contain several selections; other assessment enums are single values.
+- Timestamp columns use fixed-width UTC text through `UTCDateTime`. The model accepts aware Python datetimes and returns aware UTC datetimes; observation time has no default. Measurements use decimal centimetres with two decimal places.
 
 ## Local commands
 
@@ -64,7 +71,7 @@ flask --app neodermo:create_app db upgrade
 flask --app neodermo:create_app run --port 5000
 ```
 
-`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. There is no domain migration yet; `db upgrade` opens SQLite and applies nothing. Do not run `flask db init` again; `migrations/` already exists.
+`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. `db upgrade` now applies the first domain migration without dropping existing tables or data. Repeating it does nothing. Do not run `flask db init` again; `migrations/` already exists.
 
 In another terminal (activate the venv first):
 
@@ -77,6 +84,14 @@ Without activating:
 ```sh
 .venv/bin/pytest
 .venv/bin/flask --app neodermo:create_app run --port 5000
+```
+
+From the repository root, the Makefile offers shortcuts that use the project `.venv`:
+
+```sh
+make test
+make migration msg="add patient name"  # generate and review the migration file
+make db-upgrade                    # apply migrations to the configured local database
 ```
 
 `GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
