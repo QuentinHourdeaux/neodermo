@@ -10,6 +10,7 @@ This is a learning prototype, not a clinical system. Use fictional cases only. R
 
 - Product, privacy, and completion rules: [docs/v0.1-spec.md](docs/v0.1-spec.md)
 - How the codebase is laid out: [docs/development.md](docs/development.md)
+- How to create and apply database migrations: [docs/development.md#database-migrations](docs/development.md#database-migrations)
 - How to write Python and Flask here: [docs/guidelines.md](docs/guidelines.md)
 - Agent working notes: [AGENTS.md](AGENTS.md)
 

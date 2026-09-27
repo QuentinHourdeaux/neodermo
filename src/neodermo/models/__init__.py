@@ -1,5 +1,9 @@
-"""SQLAlchemy models.
+"""Import the domain models so Alembic sees their tables."""
 
-Empty until the first schema. create_app() imports this package so later
-models register on db.metadata automatically.
-"""
+from neodermo.models.assessment import Assessment
+from neodermo.models.establishment import Establishment
+from neodermo.models.patient import Patient
+from neodermo.models.stay import PatientStay
+from neodermo.models.wound import Wound
+
+__all__ = ["Assessment", "Establishment", "Patient", "PatientStay", "Wound"]

@@ -16,7 +16,7 @@ docs/guidelines.md
 src/neodermo/__init__.py          # create_app
 src/neodermo/config.py
 src/neodermo/extensions.py        # db = SQLAlchemy()
-src/neodermo/models/__init__.py   # empty until the first schema
+src/neodermo/models/               # establishment, patient, stay, wound, assessment
 src/neodermo/api/health.py
 migrations/                       # Flask-Migrate / Alembic
 tests/conftest.py
@@ -41,7 +41,15 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 - Read `SECRET_KEY` and `DATABASE_URL` from the environment. Commit `.env.example`, never a real `.env`.
 - Runtime SQLite and later private uploads live under `var/`. Do not put care data in `static/` or Git.
 - Tests must use a separate database path. `pytest` must never create or modify the configured runtime database.
-- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration lands with the Patient / Wound / Assessment schema. Session authentication later uses this `SECRET_KEY` and factory.
+- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Session authentication later uses this `SECRET_KEY` and factory.
+- SQLite foreign keys are enabled on every connection. A stay has one patient and one establishment. `start_date` is required; `end_date = NULL` marks an ongoing stay. A partial unique index permits at most one ongoing stay per patient, and a check rejects an end date before its start date.
+- Patient `name` is one required text field. Surrounding whitespace is trimmed, and blank names are rejected.
+- Room, bed, and service are optional free-text context on PatientStay, not separate records or unique assignments. Several patients may have the same establishment, room, and bed. Blank location input is stored as `NULL`.
+- Changing room, bed, or service updates PatientStay without changing Patient or its wound history. A transfer ends one stay and starts another at the new establishment; the old stay remains. The later API must make that change atomically.
+- A wound is open when `closed_at` is `NULL`. The later write APIs must set a server UTC timestamp when closing, clear it when reopening, reject new assessments while closed, and preserve earlier history. This schema PR adds no care-data routes.
+- Optional clinical fields are `NULL` when not recorded, except patient allergies: the non-null `allergies` text is empty when there are no allergies. `infection = false` means an explicit no, not missing data. Exudate, wound colour, and odour are single enum values.
+- Wound edges, wound tissue, and periwound skin are lists of enum values stored as JSON arrays on Assessment. SQLite has no native enum-array column, so `FindingList` validates allowed values and duplicates in Python whenever an assessment is inserted or updated through SQLAlchemy; `MutableList` tracks in-place changes. Raw SQL bypasses that validation. When Neodermo moves to PostgreSQL, migrate these fields to native enum-array columns. No extra findings table is needed.
+- Timestamp columns use fixed-width UTC text through `UTCDateTime`, with database checks for the canonical format. The model accepts aware Python datetimes and returns aware UTC datetimes; observation time has no default. Measurements use nonnegative decimal centimetres with at most two decimal places, checked before and during storage.
 
 ## Local commands
 
@@ -64,7 +72,7 @@ flask --app neodermo:create_app db upgrade
 flask --app neodermo:create_app run --port 5000
 ```
 
-`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. There is no domain migration yet; `db upgrade` opens SQLite and applies nothing. Do not run `flask db init` again; `migrations/` already exists.
+`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. `db upgrade` now applies the first domain migration without dropping existing tables or data. Repeating it does nothing. Do not run `flask db init` again; `migrations/` already exists.
 
 In another terminal (activate the venv first):
 
@@ -79,7 +87,45 @@ Without activating:
 .venv/bin/flask --app neodermo:create_app run --port 5000
 ```
 
+From the repository root, the Makefile offers shortcuts that use the project `.venv`:
+
+```sh
+make test
+make migration msg="describe schema change"  # generate and review the migration file
+make db-upgrade                    # apply migrations to the configured local database
+```
+
 `GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
+
+## Database migrations
+
+Changing a SQLAlchemy model does not change the database by itself. From the
+repository root, start with the configured database upgraded to the current
+revision, then use this sequence for a new or changed field:
+
+1. Edit the model in `src/neodermo/models/` and make sure it is imported in
+   `src/neodermo/models/__init__.py`.
+2. Run `make migration msg="describe schema change"`. This compares the models
+   with the configured database and creates a file under `migrations/versions/`.
+   It does **not** apply the change. If it reports no schema changes, no file is
+   created.
+3. Review the generated `upgrade()` and `downgrade()` before using them. Check
+   constraints, defaults, existing-row handling, and whether a renamed field
+   was mistaken for a drop and add. Edit the migration when the generated
+   operations do not express the intended change.
+4. Run `make db-upgrade` to apply pending revisions to the database selected by
+   `DATABASE_URL` (normally set in `.env`). It creates the SQLite database when
+   missing; repeating it at the latest revision is a no-op. Keep existing data
+   rather than deleting the database to apply a later migration.
+5. Run `make test`, then `.venv/bin/flask --app neodermo:create_app db check` to
+   check for model/schema drift. Tests use an isolated database and do not
+   upgrade the configured runtime database.
+
+`make migration` gives each new revision a UTC timestamp ID in
+`YYYYMMDDTHHMMSSffffffZ` form (the last six digits are microseconds, to avoid
+same-second collisions). Alembic follows each revision's `down_revision` link
+for actual upgrade order. Running `flask db migrate` directly without
+`--rev-id` uses Alembic's default generated ID.
 
 ## Adding work later
 
