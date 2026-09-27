@@ -12,13 +12,19 @@ from neodermo import PROJECT_ROOT, create_app
 from neodermo.extensions import db
 from neodermo.models import (
     Assessment,
-    AssessmentFinding,
     Establishment,
     Patient,
     PatientStay,
     Wound,
 )
-from neodermo.models.enums import Evolution, ExudateLevel, Sex
+from neodermo.models.enums import (
+    Evolution,
+    ExudateLevel,
+    PeriwoundSkin,
+    Sex,
+    WoundEdge,
+    WoundTissue,
+)
 
 
 def _upgrade() -> None:
@@ -67,9 +73,9 @@ def test_upgrade_preserves_existing_tables_and_is_repeatable():
             "patient_stays",
             "wounds",
             "assessments",
-            "assessment_findings",
         }
         assert db.session.scalar(text("SELECT value FROM legacy_marker")) == "keep"
+        assert db.session.scalar(text("SELECT version_num FROM alembic_version")) == "20260927T101720610587Z"
         assert db.session.scalar(text("PRAGMA foreign_keys")) == 1
 
 
@@ -96,14 +102,9 @@ def test_patient_two_wounds_and_assessments_round_trip(migrated_app):
         width_cm=Decimal("0.75"),
         depth_cm=Decimal("0.00"),
         remarks="Fictional example",
-    )
-    first.findings.extend(
-        [
-            AssessmentFinding(category="periwound_skin", value="redness"),
-            AssessmentFinding(category="periwound_skin", value="warmth"),
-            AssessmentFinding(category="wound_edges", value="hollowed"),
-            AssessmentFinding(category="wound_tissue", value="layer"),
-        ]
+        wound_edges=[WoundEdge.HOLLOWED],
+        wound_tissue=[WoundTissue.LAYER],
+        periwound_skin=[PeriwoundSkin.REDNESS, PeriwoundSkin.WARMTH],
     )
     second = Assessment(wound=second_wound, observed_at=datetime(2026, 9, 25, tzinfo=UTC))
     db.session.add_all([patient, first, second])
@@ -131,18 +132,116 @@ def test_patient_two_wounds_and_assessments_round_trip(migrated_app):
     assert saved_first.length_cm == Decimal("1.50")
     assert saved_first.width_cm == Decimal("0.75")
     assert saved_first.infection is False
-    assert {(item.category, item.value) for item in saved_first.findings} == {
-        ("periwound_skin", "redness"),
-        ("periwound_skin", "warmth"),
-        ("wound_edges", "hollowed"),
-        ("wound_tissue", "layer"),
-    }
+    assert saved_first.wound_edges == [WoundEdge.HOLLOWED]
+    assert saved_first.wound_tissue == [WoundTissue.LAYER]
+    assert saved_first.periwound_skin == [PeriwoundSkin.REDNESS, PeriwoundSkin.WARMTH]
+    assert saved_second.wound_edges == []
+    assert saved_second.wound_tissue == []
+    assert saved_second.periwound_skin == []
     assert saved_second.infection is None
     assert saved_second.evolution is None
     assert saved_second.length_cm is None
     assert saved_second.observations is None
     assert saved_second.remarks is None
     assert saved_first.created_at.tzinfo is UTC
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("wound_edges", ["warmth"]),
+        ("wound_tissue", ["redness"]),
+        ("periwound_skin", ["granulation"]),
+        ("wound_edges", ["normal", "normal"]),
+    ],
+)
+def test_finding_lists_reject_invalid_values_on_create(migrated_app, field, values):
+    wound = Wound(patient=_patient(Establishment(name="Fictional Clinic")))
+    assessment = Assessment(
+        wound=wound,
+        observed_at=datetime(2026, 9, 26, tzinfo=UTC),
+        **{field: values},
+    )
+    db.session.add(assessment)
+
+    with pytest.raises(StatementError):
+        db.session.commit()
+    db.session.rollback()
+    assert db.session.scalar(select(Assessment)) is None
+
+
+def test_finding_lists_validate_in_place_and_assigned_updates(migrated_app):
+    assessment = Assessment(
+        wound=Wound(patient=_patient(Establishment(name="Fictional Clinic"))),
+        observed_at=datetime(2026, 9, 26, tzinfo=UTC),
+        wound_edges=[WoundEdge.HOLLOWED],
+        wound_tissue=[WoundTissue.GRANULATION],
+        periwound_skin=[PeriwoundSkin.REDNESS],
+    )
+    db.session.add(assessment)
+    db.session.commit()
+
+    assessment.periwound_skin.append(PeriwoundSkin.WARMTH)
+    db.session.commit()
+    db.session.expire_all()
+    assert db.session.get(Assessment, assessment.id).periwound_skin == [
+        PeriwoundSkin.REDNESS,
+        PeriwoundSkin.WARMTH,
+    ]
+
+    assessment.wound_edges.append("warmth")
+    with pytest.raises(StatementError):
+        db.session.commit()
+    db.session.rollback()
+    db.session.expire_all()
+    assert db.session.get(Assessment, assessment.id).wound_edges == [WoundEdge.HOLLOWED]
+
+    assessment.wound_tissue = [WoundTissue.GRANULATION, WoundTissue.GRANULATION]
+    with pytest.raises(StatementError):
+        db.session.commit()
+    db.session.rollback()
+    db.session.expire_all()
+    assert db.session.get(Assessment, assessment.id).wound_tissue == [WoundTissue.GRANULATION]
+
+    with pytest.raises(ValueError):
+        assessment.wound_edges = "normal"
+
+
+def test_measurements_reject_excess_precision_without_changing_saved_values(migrated_app):
+    wound = Wound(patient=_patient(Establishment(name="Fictional Clinic")))
+    assessment = Assessment(
+        wound=wound,
+        observed_at=datetime(2026, 9, 26, tzinfo=UTC),
+        length_cm=Decimal("1.23"),
+        width_cm=Decimal("0.5"),
+        depth_cm=Decimal("0"),
+    )
+    db.session.add(assessment)
+    db.session.commit()
+
+    for column in ("length_cm", "width_cm", "depth_cm"):
+        with pytest.raises(ValueError, match="at most two decimal places"):
+            setattr(assessment, column, Decimal("1.234"))
+        with pytest.raises(IntegrityError):
+            db.session.execute(
+                text(f"UPDATE assessments SET {column} = :value WHERE id = :id"),
+                {"value": 1.234, "id": assessment.id},
+            )
+            db.session.commit()
+        db.session.rollback()
+
+    with pytest.raises(ValueError, match="at most two decimal places"):
+        assessment.length_cm = Decimal("1.230")
+    with pytest.raises(ValueError, match="at most two decimal places"):
+        assessment.length_cm = 1.234
+
+    db.session.expire_all()
+    saved = db.session.get(Assessment, assessment.id)
+    assert (saved.length_cm, saved.width_cm, saved.depth_cm) == (
+        Decimal("1.23"),
+        Decimal("0.50"),
+        Decimal("0.00"),
+    )
 
 
 def test_allergy_text_and_sex_round_trip(migrated_app):
@@ -296,7 +395,7 @@ def test_stays_may_share_establishment_room_and_bed(migrated_app):
     assert sum(stay.bed is None and stay.room == "13" for stay in saved_stays) == 2
 
 
-def test_foreign_keys_enums_numbers_and_findings_are_checked(migrated_app):
+def test_foreign_keys_single_value_enums_and_numbers_are_checked(migrated_app):
     establishment = Establishment(name="Fictional Clinic")
     patient = _patient(establishment)
     wound = Wound(patient=patient)
@@ -321,11 +420,6 @@ def test_foreign_keys_enums_numbers_and_findings_are_checked(migrated_app):
         ("UPDATE assessments SET length_cm = -0.5 WHERE id = :id", assessment.id),
         ("UPDATE assessments SET length_cm = 'not a number' WHERE id = :id", assessment.id),
         ("UPDATE assessments SET infection = 2 WHERE id = :id", assessment.id),
-        (
-            "INSERT INTO assessment_findings (assessment_id, category, value) "
-            "VALUES (:id, 'wound_tissue', 'warmth')",
-            assessment.id,
-        ),
     ]
     for statement, record_id in invalid_statements:
         with pytest.raises(IntegrityError):
@@ -349,25 +443,8 @@ def test_foreign_keys_enums_numbers_and_findings_are_checked(migrated_app):
         db.session.commit()
     db.session.rollback()
 
-    db.session.add(
-        AssessmentFinding(assessment_id="missing", category="wound_edges", value="normal")
-    )
+    db.session.add(Assessment(wound_id="missing", observed_at=datetime.now(UTC)))
     with pytest.raises(IntegrityError):
-        db.session.commit()
-    db.session.rollback()
-
-    db.session.add(
-        AssessmentFinding(assessment=assessment, category="wound_edges", value="normal")
-    )
-    db.session.commit()
-    with pytest.raises(IntegrityError):
-        db.session.execute(
-            text(
-                "INSERT INTO assessment_findings (assessment_id, category, value) "
-                "VALUES (:id, 'wound_edges', 'normal')"
-            ),
-            {"id": assessment.id},
-        )
         db.session.commit()
     db.session.rollback()
 
@@ -394,3 +471,39 @@ def test_observation_time_must_be_aware(migrated_app):
     with pytest.raises(StatementError):
         db.session.commit()
     db.session.rollback()
+
+
+def test_direct_sql_cannot_store_malformed_utc_timestamps(migrated_app):
+    patient = _patient(Establishment(name="Fictional Clinic"))
+    wound = Wound(patient=patient)
+    assessment = Assessment(wound=wound, observed_at=datetime(2026, 9, 26, tzinfo=UTC))
+    db.session.add(assessment)
+    db.session.commit()
+
+    offset_timestamp = "2026-09-26T12:30:00.00+02:00"
+    invalid_updates = [
+        ("assessments", "observed_at", assessment.id, offset_timestamp),
+        ("assessments", "observed_at", assessment.id, "2026-02-30T12:30:00.000000Z"),
+        ("assessments", "observed_at", assessment.id, "2026-13-01T12:30:00.000000Z"),
+        ("assessments", "observed_at", assessment.id, "2026-09-26T24:30:00.000000Z"),
+        ("assessments", "observed_at", assessment.id, "2026-09-26T12:60:00.000000Z"),
+        ("assessments", "created_at", assessment.id, offset_timestamp),
+        ("wounds", "created_at", wound.id, offset_timestamp),
+        ("wounds", "closed_at", wound.id, offset_timestamp),
+        ("patients", "created_at", patient.id, offset_timestamp),
+        ("patients", "updated_at", patient.id, offset_timestamp),
+        ("patients", "archived_at", patient.id, offset_timestamp),
+    ]
+    for table, column, record_id, timestamp in invalid_updates:
+        with pytest.raises(IntegrityError):
+            db.session.execute(
+                text(f"UPDATE {table} SET {column} = :value WHERE id = :id"),
+                {"value": timestamp, "id": record_id},
+            )
+            db.session.commit()
+        db.session.rollback()
+
+    db.session.expire_all()
+    assert db.session.get(Assessment, assessment.id).observed_at == datetime(
+        2026, 9, 26, tzinfo=UTC
+    )

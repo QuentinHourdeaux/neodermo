@@ -8,13 +8,14 @@ from sqlalchemy import Date, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from neodermo.extensions import db
-from neodermo.models.types import UTCDateTime, new_id, utc_now
+from neodermo.models.types import UTCDateTime, new_id, utc_now, utc_text_check
 
 
 class Wound(db.Model):
     """A wound whose nullable closure time determines whether it is open."""
 
     __tablename__ = "wounds"
+    __table_args__ = (utc_text_check("created_at"), utc_text_check("closed_at"))
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     patient_id: Mapped[str] = mapped_column(

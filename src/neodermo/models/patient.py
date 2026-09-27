@@ -9,7 +9,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from neodermo.extensions import db
 from neodermo.models.enums import Sex, stored_enum
-from neodermo.models.types import UTCDateTime, new_id, new_patient_reference, utc_now
+from neodermo.models.types import (
+    UTCDateTime,
+    new_id,
+    new_patient_reference,
+    utc_now,
+    utc_text_check,
+)
 
 
 class Patient(db.Model):
@@ -18,6 +24,9 @@ class Patient(db.Model):
     __tablename__ = "patients"
     __table_args__ = (
         CheckConstraint("length(trim(name)) > 0 AND name = trim(name)", name="name_present"),
+        utc_text_check("created_at"),
+        utc_text_check("updated_at"),
+        utc_text_check("archived_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

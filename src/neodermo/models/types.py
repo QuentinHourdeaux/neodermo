@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import String
+from sqlalchemy import CheckConstraint, String
 from sqlalchemy.types import TypeDecorator
 
 
@@ -20,6 +20,26 @@ def new_patient_reference() -> str:
 def utc_now() -> datetime:
     """Return an aware server timestamp in UTC."""
     return datetime.now(UTC)
+
+
+def utc_text_check(column: str) -> CheckConstraint:
+    """Require the canonical UTC text that UTCDateTime writes in SQLite."""
+    pattern = (
+        "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T"
+        "[0-9][0-9]:[0-9][0-9]:[0-9][0-9]."
+        "[0-9][0-9][0-9][0-9][0-9][0-9]Z"
+    )
+    return CheckConstraint(
+        f"{column} IS NULL OR ("
+        f"length({column}) = 27 AND {column} GLOB '{pattern}' "
+        f"AND CAST(substr({column}, 1, 4) AS INTEGER) BETWEEN 1 AND 9999 "
+        f"AND coalesce(date(substr({column}, 1, 10), '+0 days') = "
+        f"substr({column}, 1, 10), 0) "
+        f"AND CAST(substr({column}, 12, 2) AS INTEGER) BETWEEN 0 AND 23 "
+        f"AND CAST(substr({column}, 15, 2) AS INTEGER) BETWEEN 0 AND 59 "
+        f"AND CAST(substr({column}, 18, 2) AS INTEGER) BETWEEN 0 AND 59)",
+        name=f"{column}_utc_format",
+    )
 
 
 class UTCDateTime(TypeDecorator[datetime]):

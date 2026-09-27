@@ -3,22 +3,54 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Numeric, String, Text, text
+from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+from sqlalchemy.types import TypeDecorator
 
 from neodermo.extensions import db
 from neodermo.models.enums import (
     Evolution,
     ExudateLevel,
-    FindingCategory,
-    FindingValue,
     Odor,
+    PeriwoundSkin,
     WoundColor,
+    WoundEdge,
+    WoundTissue,
     stored_enum,
 )
-from neodermo.models.types import UTCDateTime, new_id, utc_now
+from neodermo.models.types import UTCDateTime, new_id, utc_now, utc_text_check
+
+
+class FindingList(TypeDecorator[list[StrEnum]]):
+    """Store an enum list as JSON and validate every value on each write."""
+
+    impl = JSON
+    cache_ok = True
+
+    def __init__(self, enum_class: type[StrEnum], field_name: str):
+        super().__init__()
+        self.enum_class = enum_class
+        self.field_name = field_name
+
+    def process_bind_param(self, values: list[StrEnum], dialect) -> list[str]:
+        if not isinstance(values, list):
+            raise ValueError(f"{self.field_name} must be a list")
+        try:
+            stored = [self.enum_class(value).value for value in values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{self.field_name} contains an invalid value") from exc
+        if len(stored) != len(set(stored)):
+            raise ValueError(f"{self.field_name} contains a duplicate value")
+        return stored
+
+    def process_result_value(self, values: list[str], dialect) -> list[StrEnum]:
+        if not isinstance(values, list):
+            raise ValueError(f"Stored {self.field_name} must be a list")
+        return [self.enum_class(value) for value in values]
 
 
 class Assessment(db.Model):
@@ -26,20 +58,25 @@ class Assessment(db.Model):
 
     __tablename__ = "assessments"
     __table_args__ = (
+        utc_text_check("observed_at"),
+        utc_text_check("created_at"),
         CheckConstraint(
             "length_cm IS NULL OR "
-            "(length_cm >= 0 AND length_cm = CAST(length_cm AS NUMERIC))",
-            name="length_nonnegative",
+            "(length_cm >= 0 AND length_cm = CAST(length_cm AS NUMERIC) "
+            "AND length_cm = ROUND(length_cm, 2))",
+            name="length_valid_centimeters",
         ),
         CheckConstraint(
             "width_cm IS NULL OR "
-            "(width_cm >= 0 AND width_cm = CAST(width_cm AS NUMERIC))",
-            name="width_nonnegative",
+            "(width_cm >= 0 AND width_cm = CAST(width_cm AS NUMERIC) "
+            "AND width_cm = ROUND(width_cm, 2))",
+            name="width_valid_centimeters",
         ),
         CheckConstraint(
             "depth_cm IS NULL OR "
-            "(depth_cm >= 0 AND depth_cm = CAST(depth_cm AS NUMERIC))",
-            name="depth_nonnegative",
+            "(depth_cm >= 0 AND depth_cm = CAST(depth_cm AS NUMERIC) "
+            "AND depth_cm = ROUND(depth_cm, 2))",
+            name="depth_valid_centimeters",
         ),
         CheckConstraint("infection IS NULL OR infection IN (0, 1)", name="infection_boolean"),
         Index("ix_assessments_wound_observed", "wound_id", "observed_at", "id"),
@@ -69,36 +106,37 @@ class Assessment(db.Model):
     width_cm: Mapped[Decimal | None] = mapped_column(Numeric(10, 2, asdecimal=True))
     depth_cm: Mapped[Decimal | None] = mapped_column(Numeric(10, 2, asdecimal=True))
     remarks: Mapped[str | None] = mapped_column(Text)
+    wound_edges: Mapped[list[WoundEdge]] = mapped_column(
+        MutableList.as_mutable(FindingList(WoundEdge, "wound_edges")),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    wound_tissue: Mapped[list[WoundTissue]] = mapped_column(
+        MutableList.as_mutable(FindingList(WoundTissue, "wound_tissue")),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    periwound_skin: Mapped[list[PeriwoundSkin]] = mapped_column(
+        MutableList.as_mutable(FindingList(PeriwoundSkin, "periwound_skin")),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
 
     wound: Mapped[Wound] = relationship(back_populates="assessments")
-    findings: Mapped[list[AssessmentFinding]] = relationship(back_populates="assessment")
 
-
-class AssessmentFinding(db.Model):
-    """One selected edge, tissue, or periwound value on an assessment."""
-
-    __tablename__ = "assessment_findings"
-    __table_args__ = (
-        CheckConstraint(
-            "(category = 'wound_edges' AND value IN "
-            "('hollowed', 'maceration', 'hyperkeratosis', 'eczema', "
-            "'epithelialization', 'normal')) OR "
-            "(category = 'wound_tissue' AND value IN "
-            "('layer', 'epithelialization', 'granulation', 'necrosis', 'intact')) OR "
-            "(category = 'periwound_skin' AND value IN "
-            "('redness', 'warmth', 'swelling', 'normal', 'eczema'))",
-            name="valid_category_value",
-        ),
-    )
-
-    assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments.id", ondelete="RESTRICT"), primary_key=True
-    )
-    category: Mapped[FindingCategory] = mapped_column(
-        stored_enum(FindingCategory, "assessment_finding_category"), primary_key=True
-    )
-    value: Mapped[FindingValue] = mapped_column(
-        stored_enum(FindingValue, "assessment_finding_value"), primary_key=True
-    )
-
-    assessment: Mapped[Assessment] = relationship(back_populates="findings")
+    @validates("length_cm", "width_cm", "depth_cm")
+    def _validate_measurement(self, key: str, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            amount = Decimal(str(value))
+        except InvalidOperation as exc:
+            raise ValueError(f"{key} must be a decimal number") from exc
+        if not amount.is_finite() or amount < 0:
+            raise ValueError(f"{key} must be nonnegative and finite")
+        if amount.as_tuple().exponent < -2:
+            raise ValueError(f"{key} must have at most two decimal places")
+        return amount

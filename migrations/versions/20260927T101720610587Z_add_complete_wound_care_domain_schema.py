@@ -1,14 +1,14 @@
 """Add the initial wound-care domain schema.
 
-Revision ID: 87aaaa44cafa
+Revision ID: 20260927T101720610587Z
 Revises:
-Create Date: 2026-09-26
+Create Date: 2026-09-27T10:17:20.610920+00:00
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "87aaaa44cafa"
+revision = "20260927T101720610587Z"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -21,6 +21,35 @@ def _choice(name: str, *values: str) -> sa.Enum:
         name=name,
         native_enum=False,
         create_constraint=True,
+    )
+
+
+def _utc_check(column: str) -> sa.CheckConstraint:
+    """Require the fixed-width UTC form written by UTCDateTime."""
+    pattern = (
+        "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T"
+        "[0-9][0-9]:[0-9][0-9]:[0-9][0-9]."
+        "[0-9][0-9][0-9][0-9][0-9][0-9]Z"
+    )
+    return sa.CheckConstraint(
+        f"{column} IS NULL OR ("
+        f"length({column}) = 27 AND {column} GLOB '{pattern}' "
+        f"AND CAST(substr({column}, 1, 4) AS INTEGER) BETWEEN 1 AND 9999 "
+        f"AND coalesce(date(substr({column}, 1, 10), '+0 days') = "
+        f"substr({column}, 1, 10), 0) "
+        f"AND CAST(substr({column}, 12, 2) AS INTEGER) BETWEEN 0 AND 23 "
+        f"AND CAST(substr({column}, 15, 2) AS INTEGER) BETWEEN 0 AND 59 "
+        f"AND CAST(substr({column}, 18, 2) AS INTEGER) BETWEEN 0 AND 59)",
+        name=f"{column}_utc_format",
+    )
+
+
+def _measurement_check(column: str) -> sa.CheckConstraint:
+    return sa.CheckConstraint(
+        f"{column} IS NULL OR "
+        f"({column} >= 0 AND {column} = CAST({column} AS NUMERIC) "
+        f"AND {column} = ROUND({column}, 2))",
+        name=f"{column.removesuffix('_cm')}_valid_centimeters",
     )
 
 
@@ -51,6 +80,9 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "length(trim(name)) > 0 AND name = trim(name)", name="name_present"
         ),
+        _utc_check("created_at"),
+        _utc_check("updated_at"),
+        _utc_check("archived_at"),
     )
     op.create_table(
         "patient_stays",
@@ -101,6 +133,8 @@ def upgrade() -> None:
         sa.Column("wound_type", sa.String(200)),
         sa.Column("created_at", sa.String(27), nullable=False),
         sa.Column("closed_at", sa.String(27)),
+        _utc_check("created_at"),
+        _utc_check("closed_at"),
     )
     op.create_index("ix_wounds_patient_id", "wounds", ["patient_id"])
 
@@ -133,80 +167,22 @@ def upgrade() -> None:
         sa.Column("width_cm", sa.Numeric(10, 2)),
         sa.Column("depth_cm", sa.Numeric(10, 2)),
         sa.Column("remarks", sa.Text()),
+        sa.Column("wound_edges", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("wound_tissue", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("periwound_skin", sa.JSON(), nullable=False, server_default="[]"),
+        _utc_check("observed_at"),
+        _utc_check("created_at"),
         sa.CheckConstraint("infection IS NULL OR infection IN (0, 1)", name="infection_boolean"),
-        sa.CheckConstraint(
-            "length_cm IS NULL OR "
-            "(length_cm >= 0 AND length_cm = CAST(length_cm AS NUMERIC))",
-            name="length_nonnegative",
-        ),
-        sa.CheckConstraint(
-            "width_cm IS NULL OR "
-            "(width_cm >= 0 AND width_cm = CAST(width_cm AS NUMERIC))",
-            name="width_nonnegative",
-        ),
-        sa.CheckConstraint(
-            "depth_cm IS NULL OR "
-            "(depth_cm >= 0 AND depth_cm = CAST(depth_cm AS NUMERIC))",
-            name="depth_nonnegative",
-        ),
+        _measurement_check("length_cm"),
+        _measurement_check("width_cm"),
+        _measurement_check("depth_cm"),
     )
     op.create_index(
         "ix_assessments_wound_observed", "assessments", ["wound_id", "observed_at", "id"]
     )
 
-    op.create_table(
-        "assessment_findings",
-        sa.Column(
-            "assessment_id",
-            sa.String(36),
-            sa.ForeignKey("assessments.id", ondelete="RESTRICT"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "category",
-            _choice(
-                "assessment_finding_category",
-                "wound_edges",
-                "wound_tissue",
-                "periwound_skin",
-            ),
-            primary_key=True,
-        ),
-        sa.Column(
-            "value",
-            _choice(
-                "assessment_finding_value",
-                "hollowed",
-                "maceration",
-                "hyperkeratosis",
-                "eczema",
-                "epithelialization",
-                "normal",
-                "layer",
-                "granulation",
-                "necrosis",
-                "intact",
-                "redness",
-                "warmth",
-                "swelling",
-            ),
-            primary_key=True,
-        ),
-        sa.CheckConstraint(
-            "(category = 'wound_edges' AND value IN "
-            "('hollowed', 'maceration', 'hyperkeratosis', 'eczema', "
-            "'epithelialization', 'normal')) OR "
-            "(category = 'wound_tissue' AND value IN "
-            "('layer', 'epithelialization', 'granulation', 'necrosis', 'intact')) OR "
-            "(category = 'periwound_skin' AND value IN "
-            "('redness', 'warmth', 'swelling', 'normal', 'eczema'))",
-            name="valid_category_value",
-        ),
-    )
-
 
 def downgrade() -> None:
-    op.drop_table("assessment_findings")
     op.drop_index("ix_assessments_wound_observed", table_name="assessments")
     op.drop_table("assessments")
     op.drop_index("ix_wounds_patient_id", table_name="wounds")
