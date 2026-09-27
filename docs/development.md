@@ -90,11 +90,41 @@ From the repository root, the Makefile offers shortcuts that use the project `.v
 
 ```sh
 make test
-make migration msg="add patient name"  # generate and review the migration file
+make migration msg="describe schema change"  # generate and review the migration file
 make db-upgrade                    # apply migrations to the configured local database
 ```
 
 `GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
+
+## Database migrations
+
+Changing a SQLAlchemy model does not change the database by itself. From the
+repository root, start with the configured database upgraded to the current
+revision, then use this sequence for a new or changed field:
+
+1. Edit the model in `src/neodermo/models/` and make sure it is imported in
+   `src/neodermo/models/__init__.py`.
+2. Run `make migration msg="describe schema change"`. This compares the models
+   with the configured database and creates a file under `migrations/versions/`.
+   It does **not** apply the change. If it reports no schema changes, no file is
+   created.
+3. Review the generated `upgrade()` and `downgrade()` before using them. Check
+   constraints, defaults, existing-row handling, and whether a renamed field
+   was mistaken for a drop and add. Edit the migration when the generated
+   operations do not express the intended change.
+4. Run `make db-upgrade` to apply pending revisions to the database selected by
+   `DATABASE_URL` (normally set in `.env`). It creates the SQLite database when
+   missing; repeating it at the latest revision is a no-op. Keep existing data
+   rather than deleting the database to apply a later migration.
+5. Run `make test`, then `.venv/bin/flask --app neodermo:create_app db check` to
+   check for model/schema drift. Tests use an isolated database and do not
+   upgrade the configured runtime database.
+
+`make migration` gives each new revision a UTC timestamp ID in
+`YYYYMMDDTHHMMSSffffffZ` form (the last six digits are microseconds, to avoid
+same-second collisions). Alembic follows each revision's `down_revision` link
+for actual upgrade order. Running `flask db migrate` directly without
+`--rev-id` uses Alembic's default generated ID.
 
 ## Adding work later
 
