@@ -97,6 +97,13 @@ make db-upgrade                    # apply migrations to the configured local da
 
 `GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
 
+Local operator provisioning is available after installing dependencies and
+applying the additive auth migration. Run
+`.venv/bin/flask --app neodermo:create_app auth bootstrap` in a terminal; see
+[the provisioning guide](authentication.md#local-operator-provisioning).
+It prompts for the mailbox and hidden password and refuses a second account.
+Login, session handling, and recovery endpoints are not implemented yet.
+
 ## Database migrations
 
 Changing a SQLAlchemy model does not change the database by itself. From the

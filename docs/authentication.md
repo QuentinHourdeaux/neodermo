@@ -1,9 +1,11 @@
 # Authentication contract
 
-This document specifies the planned API-only authentication increment. The
-current application still exposes only `/api/health`; authentication endpoints,
-storage, and enforcement are not implemented yet. The test configuration and
-file-backed fixtures described in [development.md](development.md) are available.
+This document specifies the API-only authentication increment. User, session,
+and reset-token storage, password validation/hashing, and local operator
+provisioning are implemented. The application still exposes only `/api/health`;
+auth HTTP endpoints and request enforcement are planned, not implemented yet.
+The test configuration and file-backed fixtures described in
+[development.md](development.md) are available.
 
 ## Scope and boundaries
 
@@ -29,8 +31,8 @@ not a fast token digest. Each session also has an independent random CSRF secret
 
 ## Input limits and validation
 
-These bounds are part of the planned contract; enforcement arrives with the
-auth endpoints. Reject missing/unknown fields, wrong types, non-object JSON,
+Email/password validation is available to provisioning now. HTTP-specific
+enforcement arrives with the auth endpoints. Reject missing/unknown fields, wrong types, non-object JSON,
 malformed Unicode, and oversized input without echoing submitted values.
 
 | Input | Rule |
@@ -42,9 +44,64 @@ malformed Unicode, and oversized input without echoing submitted values.
 | Password blocklist | Apply a documented local common/compromised-password list to provisioning and reset. Login checks the exact supplied password without applying a new blocklist restriction. Never transmit candidate passwords to another service. |
 | Session/reset/CSRF token | 43 URL-safe base64 characters encoding 32 random bytes without padding; reject malformed or oversized input before expensive processing. |
 
-Email normalization must be identical for provisioning, login, recovery, and
-account rate-limit keys. The final library configuration, normalization details,
-Argon2 cost, and blocklist source/version belong in the implementation change.
+Email normalization uses `email-validator==2.3.0` with strict syntax checks,
+DNS checks disabled, and SMTPUTF8 mailbox names disabled. ASCII mailbox names
+are lowercased and internationalized domains use their lowercase IDNA ASCII
+representation. The local part is limited to 64 characters. This application
+deliberately treats the whole address as case-insensitive. The same helper must
+be used by login, recovery, and account rate-limit keys. Provisioning confirms
+mailbox ownership by operator assertion; it does not send a verification email.
+
+Password hashing uses `argon2-cffi==25.1.0` with explicit Argon2id parameters:
+64 MiB memory, 3 iterations, parallelism 4, 16-byte random salt, and 32-byte hash.
+The encoded hash includes the salt and parameters. A five-hash local measurement
+on the development machine had a median of approximately 23 ms; remeasure before
+changing hardware or cost. A random dummy hash is computed once per app instance
+for future unknown-account verification, not once per login attempt.
+
+The packaged local blocklist is Django 5.2's 19,640-entry snapshot, with source,
+checksum, attribution, and license in
+[the data directory](../src/neodermo/auth/data/README.md). Screening compares a
+lowercase copy only; hashing and verification preserve the exact input. This
+finite list does not detect every compromised password. No candidate is sent
+over the network, and Django is not a runtime dependency.
+
+## Local operator provisioning
+
+Install the pinned dependencies and upgrade the configured database first:
+
+```sh
+.venv/bin/python -m pip install -e ".[dev]"
+make db-upgrade
+.venv/bin/flask --app neodermo:create_app auth bootstrap
+```
+
+Run bootstrap in an interactive terminal. Enter the recovery email twice,
+confirm control of that mailbox, then enter and confirm the password without
+echo. There is no password argument, environment variable, or credential file.
+The command refuses to fall back to echoed input when no suitable terminal is
+available. A 120-second wall-clock deadline covers the entire command, including
+all prompts; on expiry it exits with an error and releases its timer and database
+resources. The local CLI requires macOS or Linux for this deadline. Validation
+errors do not repeat submitted values.
+
+Bootstrap refuses a second account. After validation/hashing, a SQLite
+`BEGIN IMMEDIATE` transaction serializes the final empty-users check and insert.
+No lock is held while prompting or hashing. Concurrent bootstrap attempts have
+one winner; failures roll back the insert. Lock contention is bounded by the
+SQLite driver's connection timeout and produces a generic operational error.
+Do not manually remove the operator to reset a password; recovery is a later
+milestone of this increment.
+
+The additive auth migration follows the existing domain migration. Users have
+unique normalized emails. Sessions/reset records reference users, store unique
+SHA-256 token digests, enforce UTC timestamps and expiry after creation, and
+index user/expiry columns. Deleting a user cascades their credential rows; no
+user-deletion command is exposed. Multiple fictional users are allowed in tests;
+the single-operator restriction belongs to the provisioning operation.
+
+No session or reset credentials are issued by this milestone. Never treat a
+database row alone as an implemented login or recovery flow.
 
 ## Session and request policy
 

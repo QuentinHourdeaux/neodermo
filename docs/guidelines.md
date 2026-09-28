@@ -86,6 +86,21 @@ def check_database() -> dict[str, str]:
 - When write APIs exist, reject unknown fields. JSON field names stay stable
   once documented.
 
+## API and application data shapes
+
+- Keep a reusable request, response, or application data shape beside the
+  feature that owns it (for example, `neodermo/auth/contracts.py`). Define it
+  once and import it where needed. Keep a one-off shape near its only use.
+- Keep HTTP contracts distinct from SQLAlchemy models. The models already
+  describe database records; do not duplicate every model as a dataclass or
+  expose a model directly as an API response. Select and return only the fields
+  the endpoint promises, especially for accounts with password hashes.
+- Type hints and dataclasses describe Python values; they do not validate
+  incoming JSON or enforce an outgoing response shape by themselves. Validate
+  request data at the HTTP boundary and test the documented response fields.
+- Add a project-wide types package only when shapes are genuinely shared
+  across features. Do not introduce a central catalog for a single feature.
+
 ## Environments
 
 A second person should be able to clone, create `.venv`, copy `.env.example` to
@@ -106,7 +121,7 @@ unwritten knowledge, these docs are incomplete.
   becomes that URL).
 - Optional: `FLASK_DEBUG`. Later work may add an upload directory and auth/mail
   settings. Add supported settings to `.env.example` in the change that implements
-  them. Operator provisioning will store a password hash in the database, not
+  them. Operator provisioning stores a password hash in the database, not
   a credential file or environment variable; see [authentication.md](authentication.md).
 - Tests must pass with no `.env` present, and must still pass if `.env` points
   at the runtime database. pytest must not create or modify that runtime file.

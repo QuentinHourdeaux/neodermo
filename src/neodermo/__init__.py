@@ -58,8 +58,12 @@ def create_app(
     # Import the models package so later table classes register on db.
     from neodermo import models  # noqa: F401
     from neodermo.api.health import bp as health_bp
+    from neodermo.auth.cli import auth_cli
+    from neodermo.auth.passwords import init_passwords
 
     app.register_blueprint(health_bp, url_prefix="/api")
+    app.cli.add_command(auth_cli)
+    init_passwords(app)
 
     return app
 
