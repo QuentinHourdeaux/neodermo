@@ -44,7 +44,7 @@ def _object_body(expected: set[str]) -> dict[str, str] | None:
         return None
     try:
         value = json.loads(body.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
-    except (UnicodeError, json.JSONDecodeError, _InvalidJSON):
+    except (ValueError, RecursionError, _InvalidJSON):
         return None
     if type(value) is not dict or value.keys() != expected:
         return None

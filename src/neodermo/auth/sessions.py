@@ -42,9 +42,14 @@ def auth_now() -> datetime:
     return current_app.config.get("AUTH_NOW", utc_now)()
 
 
+def valid_token_format(token: str | None) -> bool:
+    """Check the shared 32-byte URL-safe credential token shape."""
+    return isinstance(token, str) and _TOKEN_PATTERN.fullmatch(token) is not None
+
+
 def token_digest(token: str | None) -> str | None:
     """Reject malformed cookies before hashing; never store the bearer value."""
-    if not isinstance(token, str) or _TOKEN_PATTERN.fullmatch(token) is None:
+    if not valid_token_format(token):
         return None
     return hashlib.sha256(token.encode("ascii")).hexdigest()
 

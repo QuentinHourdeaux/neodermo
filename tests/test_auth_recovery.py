@@ -338,8 +338,15 @@ def test_token_is_rechecked_for_expiry_inside_write_lock(recovery_app, monkeypat
 @pytest.mark.parametrize("path,body", [
     ("forgot-password", '{"email":"operator@example.com","other":"x"}'),
     ("forgot-password", '["operator@example.com"]'),
+    pytest.param(
+        "forgot-password", '{"email":' + '1' * 5000 + '}', id="forgot-large-json-integer"
+    ),
     ("reset-password", '{"token":"x","new_password":"x","other":"x"}'),
     ("reset-password", '{"token":4,"new_password":"x"}'),
+    pytest.param(
+        "reset-password", '{"token":' + '1' * 5000 + ',"new_password":"x"}',
+        id="reset-large-json-integer",
+    ),
 ])
 def test_recovery_rejects_unexpected_json_fields_and_types(recovery_app, path, body):
     app, outbox = recovery_app

@@ -211,6 +211,9 @@ def test_api_protection_origin_csrf_and_default_route(operator_app):
     '{"email":"operator@example.com","email":"other@example.com","password":"ok"}',
     '{"email":3,"password":"ok"}',
     "[]", "null", "{invalid}",
+    pytest.param(
+        '{"email":' + '1' * 5000 + ',"password":"ok"}', id="large-json-integer"
+    ),
 ])
 def test_login_rejects_malformed_or_ambiguous_json(operator_app, body):
     response = operator_app.test_client().post(
@@ -241,6 +244,22 @@ def test_logout_requires_origin_and_csrf(operator_app):
     assert browser.post("/api/auth/logout", headers={"Origin": "null"}).status_code == 403
     assert browser.get_cookie(COOKIE_NAME).value == cookie
     assert browser.get("/api/auth/session").json["authenticated"] is True
+
+
+def test_non_ascii_csrf_header_is_rejected_without_revoking_session(operator_app):
+    browser = operator_app.test_client()
+    assert login(browser).status_code == 200
+    csrf = browser.get("/api/auth/session").json["csrf_token"]
+    malformed = browser.post(
+        "/api/auth/logout", headers={**ORIGIN, "X-CSRF-Token": "é"},
+    )
+    assert malformed.status_code == 403
+    assert malformed.json == {"error": {"code": "invalid_csrf"}}
+    assert malformed.headers["Cache-Control"] == "no-store"
+    assert browser.get("/api/auth/session").json["authenticated"] is True
+    assert browser.post(
+        "/api/auth/logout", headers={**ORIGIN, "X-CSRF-Token": csrf},
+    ).status_code == 204
 
 
 def test_secure_cookie_on_https_configuration(operator_app):

@@ -4,7 +4,7 @@ import secrets
 
 from flask import Flask, Response, g, jsonify, request
 
-from neodermo.auth.sessions import COOKIE_NAME, lookup_session
+from neodermo.auth.sessions import COOKIE_NAME, lookup_session, valid_token_format
 from neodermo.models import User
 
 _PUBLIC_ENDPOINTS = frozenset({
@@ -49,7 +49,9 @@ def install_auth_policy(app: Flask) -> None:
             return error_response("forbidden", 403)
         if request.method not in _SAFE_METHODS:
             header = request.headers.get("X-CSRF-Token", "")
-            if not secrets.compare_digest(header, g.current_session.csrf_secret):
+            if not valid_token_format(header) or not secrets.compare_digest(
+                header, g.current_session.csrf_secret
+            ):
                 return error_response("invalid_csrf", 403)
         return None
 
