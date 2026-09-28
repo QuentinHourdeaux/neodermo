@@ -29,12 +29,11 @@ def test_health_fails_when_database_unavailable(client):
 
 def test_testing_config_ignores_runtime_database_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:///var/neodermo.sqlite")
-    monkeypatch.setenv("SECRET_KEY", "must-not-be-used")
 
     app = create_app("testing")
 
     assert app.config["SQLALCHEMY_DATABASE_URI"] == "sqlite:///:memory:"
-    assert app.config["SECRET_KEY"] == "test"
+    assert app.config["SECRET_KEY"] is None
 
 
 def test_health_fails_when_database_is_corrupt(tmp_path, monkeypatch):
@@ -42,7 +41,6 @@ def test_health_fails_when_database_is_corrupt(tmp_path, monkeypatch):
     corrupt.write_bytes(b"this is not a sqlite database")
     before_runtime = _snapshot(RUNTIME_DB)
 
-    monkeypatch.setenv("SECRET_KEY", "test")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{corrupt}")
 
     app = create_app("development")

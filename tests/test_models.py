@@ -27,8 +27,8 @@ from neodermo.models.enums import (
 )
 
 
-def _upgrade() -> None:
-    upgrade(directory=str(PROJECT_ROOT / "migrations"))
+def _upgrade(revision: str = "head") -> None:
+    upgrade(directory=str(PROJECT_ROOT / "migrations"), revision=revision)
 
 
 @pytest.fixture
@@ -60,9 +60,9 @@ def test_upgrade_preserves_existing_tables_and_is_repeatable():
         db.session.execute(text("INSERT INTO legacy_marker VALUES ('keep')"))
         db.session.commit()
 
-        _upgrade()
+        _upgrade("20260927T101720610587Z")
         names = set(inspect(db.engine).get_table_names())
-        _upgrade()
+        _upgrade("20260927T101720610587Z")
 
         assert names == set(inspect(db.engine).get_table_names())
         assert names == {

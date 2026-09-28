@@ -1,7 +1,11 @@
 """Neodermo application package."""
 
 import os
+from collections.abc import Mapping
+from ipaddress import ip_address
+from math import isfinite
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from flask import Flask
@@ -15,43 +19,132 @@ __version__ = "0.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def create_app(config_name: str | None = None) -> Flask:
+def create_app(
+    config_name: str | None = None,
+    *,
+    test_config: Mapping[str, object] | None = None,
+) -> Flask:
     """Build and return a configured Flask app.
 
     A new app is created each call so tests and the migration CLI do not
-    share one global instance.
+    share one global instance. Testing overrides are applied before extensions
+    initialize, without loading runtime environment configuration.
     """
     name = config_name or os.environ.get("NEODERMO_ENV", "development")
     if name not in CONFIGS:
         raise RuntimeError(f"Unknown config {name!r}. Use development or testing.")
+    if test_config is not None and name != "testing":
+        raise ValueError("test_config requires the testing configuration.")
 
     if name != "testing":
         load_dotenv()
 
     app = Flask(__name__)
     app.config.from_object(CONFIGS[name])
+    if test_config is not None:
+        app.config.from_mapping(test_config)
 
     if name != "testing":
-        secret_key = os.environ.get("SECRET_KEY")
         database_url = os.environ.get("DATABASE_URL")
-        if not secret_key or not database_url:
-            raise RuntimeError(
-                "SECRET_KEY and DATABASE_URL must be set. "
-                "Copy .env.example to .env."
-            )
-        app.config["SECRET_KEY"] = secret_key
+        if not database_url:
+            raise RuntimeError("DATABASE_URL must be set. Copy .env.example to .env.")
         app.config["SQLALCHEMY_DATABASE_URI"] = _resolve_sqlite_url(database_url)
+        app.config["TRUSTED_FRONTEND_ORIGINS"] = tuple(
+            origin.strip() for origin in
+            os.environ.get("TRUSTED_FRONTEND_ORIGINS", "http://127.0.0.1:5000").split(",")
+        )
+        try:
+            app.config["SESSION_LIFETIME_SECONDS"] = int(
+                os.environ.get("SESSION_LIFETIME_SECONDS", "43200")
+            )
+        except ValueError:
+            raise RuntimeError("SESSION_LIFETIME_SECONDS must be a positive integer.") from None
+        app.config["AUTH_COOKIE_SECURE"] = not (
+            os.environ.get("ALLOW_INSECURE_LOOPBACK_COOKIE") == "1"
+        )
+        app.config["SMTP_HOST"] = os.environ.get("SMTP_HOST", "127.0.0.1")
+        try:
+            app.config["SMTP_PORT"] = int(os.environ.get("SMTP_PORT", "1025"))
+        except ValueError:
+            raise RuntimeError("SMTP_PORT must be an integer between 1 and 65535.") from None
+
+    _validate_auth_config(app, name)
+    _validate_mail_config(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
 
     # Import the models package so later table classes register on db.
     from neodermo import models  # noqa: F401
+    from neodermo.api.auth import bp as auth_bp
     from neodermo.api.health import bp as health_bp
+    from neodermo.auth.cli import auth_cli
+    from neodermo.auth.limits import install_auth_limits
+    from neodermo.auth.passwords import init_passwords
+    from neodermo.auth.policy import install_auth_policy
 
     app.register_blueprint(health_bp, url_prefix="/api")
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
+    app.cli.add_command(auth_cli)
+    init_passwords(app)
+    install_auth_limits(app)
+    install_auth_policy(app)
 
     return app
+
+
+def _validate_auth_config(app: Flask, name: str) -> None:
+    """Reject origin/cookie settings that would weaken request protection."""
+    lifetime = app.config["SESSION_LIFETIME_SECONDS"]
+    if type(lifetime) is not int or lifetime <= 0:
+        raise RuntimeError("SESSION_LIFETIME_SECONDS must be a positive integer.")
+    origins = app.config["TRUSTED_FRONTEND_ORIGINS"]
+    if not isinstance(origins, (tuple, list)) or not origins:
+        raise RuntimeError("TRUSTED_FRONTEND_ORIGINS must list exact origins.")
+    for origin in origins:
+        if not isinstance(origin, str) or not origin or origin == "null":
+            raise RuntimeError("TRUSTED_FRONTEND_ORIGINS must list exact origins.")
+        try:
+            parts = urlsplit(origin)
+            port = parts.port
+        except ValueError:
+            raise RuntimeError("TRUSTED_FRONTEND_ORIGINS contains an invalid origin.") from None
+        if (parts.scheme not in ("http", "https") or not parts.hostname or
+                parts.username or parts.password or port == 0 or
+                origin != f"{parts.scheme}://{parts.netloc}"):
+            raise RuntimeError("TRUSTED_FRONTEND_ORIGINS must list exact origins.")
+    if type(app.config["AUTH_COOKIE_SECURE"]) is not bool:
+        raise RuntimeError("AUTH_COOKIE_SECURE must be a boolean.")
+    if not app.config["AUTH_COOKIE_SECURE"]:
+        if name not in ("development", "testing") or any(
+            urlsplit(origin).scheme != "http" or not _is_loopback(urlsplit(origin).hostname)
+            for origin in origins
+        ):
+            raise RuntimeError("Insecure auth cookies require a loopback HTTP origin.")
+
+
+def _is_loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return bool(host and ip_address(host).is_loopback)
+    except ValueError:
+        return False
+
+
+def _validate_mail_config(app: Flask) -> None:
+    """Keep development recovery mail on the local capture server."""
+    if not isinstance(app.config["SMTP_HOST"], str) or not _is_loopback(app.config["SMTP_HOST"]):
+        raise RuntimeError("SMTP_HOST must be a loopback address.")
+    port = app.config["SMTP_PORT"]
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise RuntimeError("SMTP_PORT must be an integer between 1 and 65535.")
+    timeout = app.config["SMTP_TIMEOUT_SECONDS"]
+    floor = app.config["RECOVERY_RESPONSE_FLOOR_SECONDS"]
+    if type(timeout) not in (int, float) or not isfinite(timeout) or timeout <= 0:
+        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be positive.")
+    if type(floor) not in (int, float) or not isfinite(floor) or floor < 0:
+        raise RuntimeError("RECOVERY_RESPONSE_FLOOR_SECONDS must be nonnegative.")
 
 
 def _resolve_sqlite_url(database_url: str) -> str:

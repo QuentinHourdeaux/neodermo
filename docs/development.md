@@ -16,8 +16,9 @@ docs/guidelines.md
 src/neodermo/__init__.py          # create_app
 src/neodermo/config.py
 src/neodermo/extensions.py        # db = SQLAlchemy()
-src/neodermo/models/               # establishment, patient, stay, wound, assessment
-src/neodermo/api/health.py
+src/neodermo/models/               # domain and authentication tables
+src/neodermo/auth/                 # provisioning, sessions, recovery, cleanup
+src/neodermo/api/                  # health and authentication routes
 migrations/                       # Flask-Migrate / Alembic
 tests/conftest.py
 tests/test_health.py
@@ -38,10 +39,10 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 
 ## Configuration and data
 
-- Read `SECRET_KEY` and `DATABASE_URL` from the environment. Commit `.env.example`, never a real `.env`.
+- Read `DATABASE_URL` and authentication settings from the environment. Commit `.env.example`, never a real `.env`.
 - Runtime SQLite and later private uploads live under `var/`. Do not put care data in `static/` or Git.
 - Tests must use a separate database path. `pytest` must never create or modify the configured runtime database.
-- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Session authentication later uses this `SECRET_KEY` and factory.
+- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Authentication uses email/password login, opaque database sessions, and mail-only recovery. See [authentication.md](authentication.md). Flask's `SECRET_KEY` is not needed for these database-backed sessions.
 - SQLite foreign keys are enabled on every connection. A stay has one patient and one establishment. `start_date` is required; `end_date = NULL` marks an ongoing stay. A partial unique index permits at most one ongoing stay per patient, and a check rejects an end date before its start date.
 - Patient `name` is one required text field. Surrounding whitespace is trimmed, and blank names are rejected.
 - Room, bed, and service are optional free-text context on PatientStay, not separate records or unique assignments. Several patients may have the same establishment, room, and bed. Blank location input is stored as `NULL`.
@@ -62,7 +63,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# replace SECRET_KEY in .env with a local random string
+# review DATABASE_URL and TRUSTED_FRONTEND_ORIGINS in .env
 ```
 
 Then, with the venv still active:
@@ -72,7 +73,7 @@ flask --app neodermo:create_app db upgrade
 flask --app neodermo:create_app run --port 5000
 ```
 
-`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. `db upgrade` now applies the first domain migration without dropping existing tables or data. Repeating it does nothing. Do not run `flask db init` again; `migrations/` already exists.
+`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. `db upgrade` applies the domain and auth migrations without dropping existing data. Repeating it does nothing. Do not run `flask db init` again; `migrations/` already exists.
 
 In another terminal (activate the venv first):
 
@@ -95,7 +96,29 @@ make migration msg="describe schema change"  # generate and review the migration
 make db-upgrade                    # apply migrations to the configured local database
 ```
 
-`GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
+`GET /api/health` reports database connectivity and must not return secrets or paths.
+
+Local operator provisioning is available after installing dependencies and
+applying the additive auth migration. Run
+`.venv/bin/flask --app neodermo:create_app auth bootstrap` in a terminal; see
+[the provisioning guide](authentication.md#local-operator-provisioning).
+It prompts for the mailbox and hidden password and refuses a second account.
+Login, session status, logout, default API protection, rate limits, and recovery
+are implemented. For loopback HTTP development,
+set `ALLOW_INSECURE_LOOPBACK_COOKIE=1` and include the exact browser origin in
+`TRUSTED_FRONTEND_ORIGINS`. Keep the default Secure cookie for HTTPS. Every
+unsafe API request needs that exact `Origin`; protected mutations also need the
+`X-CSRF-Token` returned by login or `GET /api/auth/session`. See
+[the authentication contract](authentication.md#http-contract).
+If your `.env` predates login support, copy these new settings from
+`.env.example` before trying the browser flow.
+Recovery also needs local Mailpit on `127.0.0.1:1025` for SMTP and
+`127.0.0.1:8025` for the inbox. See
+[the recovery guide](authentication.md#local-http-examples).
+Run `.venv/bin/flask --app neodermo:create_app auth cleanup` daily or after a
+restart to remove expired sessions and reset tokens. The API rejects them even
+before cleanup; the command reclaims storage and prints only counts. See
+[the cleanup guide](authentication.md#expired-credential-cleanup).
 
 ## Database migrations
 
@@ -128,6 +151,22 @@ for actual upgrade order. Running `flask db migrate` directly without
 `--rev-id` uses Alembic's default generated ID.
 
 ## Adding work later
+
+### Isolated test applications
+
+`create_app("testing", test_config={...})` applies explicit test configuration
+before SQLAlchemy and Flask-Migrate initialize. It does not load `.env` or use
+runtime `DATABASE_URL` or authentication settings. Overrides are accepted only with the
+testing configuration; they are not a second runtime configuration channel.
+
+The existing `app`/`client` fixtures use in-memory SQLite for lightweight checks.
+`file_app_factory` builds separate app instances sharing one `tmp_path` SQLite
+file within a test. Call it again for restart or separate-connection checks;
+migrations are explicit. `migrated_file_app` provides that app already upgraded
+through the real Alembic migrations. Both file fixtures release database sessions
+and dispose engines at teardown. Never point test overrides at the runtime file.
+
+### Extending the application
 
 - New HTTP: add a blueprint module under `src/neodermo/api/` and register it from `create_app()`.
 - New tables: add models under `src/neodermo/models/` and generate a new Alembic revision. Do not rewrite merged migrations.

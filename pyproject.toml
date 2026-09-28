@@ -13,6 +13,9 @@ dependencies = [
     "flask-sqlalchemy==3.1.1",
     "flask-migrate==4.1.0",
     "python-dotenv==1.2.3",
+    "argon2-cffi==25.1.0",  # Maintained Argon2id password hashing.
+    "email-validator==2.3.0",  # Shared email syntax validation and normalization.
+    "Flask-Limiter==4.1.1",  # Independent, bounded auth request limits.
 ]
 
 [project.optional-dependencies]
@@ -22,6 +25,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"neodermo.auth" = ["data/*.gz", "data/*.txt", "data/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
