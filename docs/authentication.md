@@ -162,16 +162,27 @@ its existing response shape. Error codes are:
 | 403 | `invalid_origin` | Unsafe request has no trusted Origin. |
 | 403 | `invalid_csrf` | Protected mutation has no matching session CSRF token. |
 | 403 | `forbidden` | Authenticated user lacks permission for the operation. |
+| 429 | `rate_limited` | Login limit exceeded; includes `Retry-After` in seconds. |
 
 The planned recovery endpoint will use `invalid_reset_token` for unknown,
-expired, and consumed tokens. The planned rate limits will use `rate_limited`
-with `Retry-After`.
+expired, and consumed tokens.
 
-Login, recovery requests, and reset attempts will have address limits and
-account/token limits using maintained tooling. Apply equivalent rules to known
-and unknown accounts without permanent lockouts. Document the concrete limits,
-storage, and single-process assumption when implemented; forwarded headers are
-not trusted for the direct local deployment.
+Login has two independent fixed-window limits: 30 requests per minute from the
+connection's remote address and 5 per minute for a normalized email, whether
+that account exists or not. The email bucket key is a digest of the normalized
+address. Malformed requests still consume the address bucket; requests without
+a valid normalized email do not consume an email bucket. The check runs before
+password verification. A 429 response includes `Retry-After`; there are no
+permanent account locks. Forwarded headers are not trusted for this direct
+local deployment.
+
+[Flask-Limiter](https://flask-limiter.readthedocs.io/en/stable/) uses an
+in-memory store here. Counters reset when the app restarts and do not coordinate
+between workers; run this local deployment as one process. When recovery routes
+are implemented, add their planned independent limits: forgot password 10/hour
+per address and 3/hour per normalized email; reset password 20/minute per
+address and 5/minute per submitted token digest. Do not accept an email in a
+reset request to select its rate-limit bucket.
 
 Recovery requests must avoid an obvious account-existence timing shortcut.
 Deliver reset credentials only to the provisioned mailbox through a loopback

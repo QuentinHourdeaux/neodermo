@@ -102,8 +102,8 @@ applying the additive auth migration. Run
 `.venv/bin/flask --app neodermo:create_app auth bootstrap` in a terminal; see
 [the provisioning guide](authentication.md#local-operator-provisioning).
 It prompts for the mailbox and hidden password and refuses a second account.
-Login, session status, logout, and default API protection are implemented.
-Recovery and rate limits follow in later steps. For loopback HTTP development,
+Login, session status, logout, default API protection, and login rate limits are
+implemented. Recovery and its rate limits follow in later steps. For loopback HTTP development,
 set `ALLOW_INSECURE_LOOPBACK_COOKIE=1` and include the exact browser origin in
 `TRUSTED_FRONTEND_ORIGINS`. Keep the default Secure cookie for HTTPS. Every
 unsafe API request needs that exact `Origin`; protected mutations also need the

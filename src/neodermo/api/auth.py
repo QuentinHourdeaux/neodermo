@@ -1,5 +1,6 @@
 """HTTP translation for current-user login, status, and logout."""
 
+import hashlib
 import json
 
 from flask import Blueprint, g, jsonify, make_response, request
@@ -48,14 +49,38 @@ def _object_body(expected: set[str]) -> dict[str, str] | None:
     return value
 
 
+def _login_input() -> tuple[dict[str, str] | None, str | None]:
+    """Parse once so limiter keys and the route use the same bounded input."""
+    if not hasattr(g, "login_input"):
+        body = _object_body({"email", "password"})
+        email = None
+        if body is not None:
+            try:
+                email = normalize_email(body["email"])
+            except (ValueError, UnicodeError):
+                pass
+        g.login_input = body, email
+    return g.login_input
+
+
+def login_email_bucket() -> str:
+    """Use a digest of normalized email, never the submitted spelling."""
+    _, email = _login_input()
+    return hashlib.sha256(email.encode("ascii")).hexdigest() if email else "invalid"
+
+
+def login_email_unavailable() -> bool:
+    """Malformed or unaddressed requests are limited by client address only."""
+    return _login_input()[1] is None
+
+
 @bp.post("/login")
 def login():
     """Exchange valid credentials for a fresh database session and CSRF token."""
-    body = _object_body({"email", "password"})
-    if body is None or not 15 <= len(body["password"]) <= 128:
+    body, email = _login_input()
+    if body is None or email is None or not 15 <= len(body["password"]) <= 128:
         return error_response("invalid_request", 400)
     try:
-        email = normalize_email(body["email"])
         body["password"].encode("utf-8")
     except (ValueError, UnicodeError):
         return error_response("invalid_request", 400)

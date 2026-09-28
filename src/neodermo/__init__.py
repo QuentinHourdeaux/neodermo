@@ -72,6 +72,7 @@ def create_app(
     from neodermo.api.auth import bp as auth_bp
     from neodermo.api.health import bp as health_bp
     from neodermo.auth.cli import auth_cli
+    from neodermo.auth.limits import install_auth_limits
     from neodermo.auth.passwords import init_passwords
     from neodermo.auth.policy import install_auth_policy
 
@@ -79,6 +80,7 @@ def create_app(
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.cli.add_command(auth_cli)
     init_passwords(app)
+    install_auth_limits(app)
     install_auth_policy(app)
 
     return app
