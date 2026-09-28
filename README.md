@@ -24,7 +24,7 @@ This is a learning prototype, not a clinical system. Use fictional cases only. R
 | Database | SQLite for v0.1, PostgreSQL later |
 | Backend tests | pytest |
 
-v0.1 runs locally in a desktop browser. That is a time-box, not a product change: Android access stays the next milestone and should keep using the same backend.
+v0.1 runs locally in a desktop browser. The complete authentication lifecycle is part of this learning slice, even though it extends the original time box. Android access stays the next milestone and should keep using the same backend.
 
 ## Local commands
 

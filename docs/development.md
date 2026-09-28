@@ -16,8 +16,9 @@ docs/guidelines.md
 src/neodermo/__init__.py          # create_app
 src/neodermo/config.py
 src/neodermo/extensions.py        # db = SQLAlchemy()
-src/neodermo/models/               # establishment, patient, stay, wound, assessment
-src/neodermo/api/health.py
+src/neodermo/models/               # domain and authentication tables
+src/neodermo/auth/                 # provisioning, sessions, recovery, cleanup
+src/neodermo/api/                  # health and authentication routes
 migrations/                       # Flask-Migrate / Alembic
 tests/conftest.py
 tests/test_health.py
@@ -72,7 +73,7 @@ flask --app neodermo:create_app db upgrade
 flask --app neodermo:create_app run --port 5000
 ```
 
-`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. `db upgrade` now applies the first domain migration without dropping existing tables or data. Repeating it does nothing. Do not run `flask db init` again; `migrations/` already exists.
+`GET http://127.0.0.1:5000/api/health` should return `{"status":"ok","database":"ok"}`. `db upgrade` applies the domain and auth migrations without dropping existing data. Repeating it does nothing. Do not run `flask db init` again; `migrations/` already exists.
 
 In another terminal (activate the venv first):
 
@@ -113,7 +114,11 @@ If your `.env` predates login support, copy these new settings from
 `.env.example` before trying the browser flow.
 Recovery also needs local Mailpit on `127.0.0.1:1025` for SMTP and
 `127.0.0.1:8025` for the inbox. See
-[the recovery guide](authentication.md#http-contract).
+[the recovery guide](authentication.md#local-http-examples).
+Run `.venv/bin/flask --app neodermo:create_app auth cleanup` daily or after a
+restart to remove expired sessions and reset tokens. The API rejects them even
+before cleanup; the command reclaims storage and prints only counts. See
+[the cleanup guide](authentication.md#expired-credential-cleanup).
 
 ## Database migrations
 

@@ -3,8 +3,7 @@
 This document specifies the API-only authentication increment. User, session,
 and reset-token storage, password validation/hashing, and local operator
 provisioning, login, current-session status, logout, API request protection,
-rate limits, and password recovery are implemented. Cleanup and full HTTP
-verification remain.
+rate limits, password recovery, and expired-credential cleanup are implemented.
 The test configuration and file-backed fixtures described in
 [development.md](development.md) are available.
 
@@ -209,8 +208,71 @@ Set `SMTP_HOST=127.0.0.1` and `SMTP_PORT=1025` in `.env`, then inspect
 instructions, not a link to a nonexistent recovery page. The app refuses a
 non-loopback SMTP host. Test fixtures use a separate fake outbox.
 
-Before this increment is complete, document full HTTP examples with explicit
-Origin/CSRF headers, token expiry cleanup, and
-credential-free logs. Authentication must be in place before clinical endpoints
-ship. Recovery UI, external mail services, JWT/OAuth, MFA, and multi-user clinical
-authorization are later work.
+## Expired credential cleanup
+
+Expired sessions and reset tokens are rejected by the API even before cleanup.
+Run the following command once per day on a running local installation, or
+after restarting it, to reclaim their database rows:
+
+```sh
+.venv/bin/flask --app neodermo:create_app auth cleanup
+```
+
+The command deletes rows whose `expires_at` is at or before its UTC cutoff.
+It leaves live credentials and the operator untouched, is safe to repeat, and
+prints only deletion counts. It requires the configured database to have been
+migrated. This local project does not add a scheduler or background worker.
+
+## Local HTTP examples
+
+With the server listening on `127.0.0.1:5000`, an upgraded database, a
+bootstrapped operator, and Mailpit running as shown above, these requests use
+the documented JSON shapes. Set `ALLOW_INSECURE_LOOPBACK_COOKIE=1` for this
+HTTP-only exercise. Keep each JSON file outside the repository, with mode 600;
+for example, `login.json` contains
+`{"email":"operator@example.com","password":"<your password>"}`. Create
+`forgot.json` with only `email`, and `reset.json` with `token` and
+`new_password`. Do not place a real password or token in a shell command.
+
+```sh
+ORIGIN=http://127.0.0.1:5000
+JAR="$(mktemp)"
+chmod 600 "$JAR"
+
+curl -i -c "$JAR" -H "Origin: $ORIGIN" -H 'Content-Type: application/json' \
+  --data-binary @/private/path/login.json "$ORIGIN/api/auth/login"
+curl -i -b "$JAR" "$ORIGIN/api/auth/session"
+```
+
+The login response supplies `csrf_token`; use its exact value below. A new
+test-only `/api/probe` route, if registered in a disposable local harness, must
+return 401 without the cookie and 200 with it. There is no shipped clinical
+route yet. A second cookie jar can hold an independent login; logging out the
+first must leave the second active.
+
+```sh
+printf 'CSRF token from login: '
+read -r CSRF_TOKEN
+curl -i -b "$JAR" -c "$JAR" -X POST -H "Origin: $ORIGIN" \
+  -H "X-CSRF-Token: $CSRF_TOKEN" "$ORIGIN/api/auth/logout"
+curl -i -b "$JAR" "$ORIGIN/api/auth/session"
+
+curl -i -H "Origin: $ORIGIN" -H 'Content-Type: application/json' \
+  --data-binary @/private/path/forgot.json "$ORIGIN/api/auth/forgot-password"
+```
+
+Read the one-time token from the local Mailpit inbox, put it in the protected
+`reset.json` file, then submit it. The reset succeeds with 204, rejects old
+sessions and the old password, and permits a fresh login with the new password.
+Its token cannot be replayed.
+
+```sh
+curl -i -H "Origin: $ORIGIN" -H 'Content-Type: application/json' \
+  --data-binary @/private/path/reset.json "$ORIGIN/api/auth/reset-password"
+rm -f "$JAR"
+```
+
+Do not retain the JSON files or captured mail after this local check. Inspect
+responses and server logs for accidental credentials. Authentication must be in
+place before clinical endpoints ship. Recovery UI, external mail services,
+JWT/OAuth, MFA, and multi-user clinical authorization are later work.

@@ -10,6 +10,7 @@ import click
 from flask.cli import AppGroup
 
 from neodermo.auth.bootstrap import ProvisioningError, operator_exists, provision_operator
+from neodermo.auth.cleanup import CleanupUnavailable, cleanup_expired
 from neodermo.auth.validation import normalize_email
 
 auth_cli = AppGroup("auth", help="Manage the locally provisioned operator.")
@@ -77,3 +78,16 @@ def bootstrap() -> None:
     except EOFError:
         raise click.Abort() from None
     click.echo("Operator created.")
+
+
+@auth_cli.command("cleanup")
+def cleanup() -> None:
+    """Delete expired sessions and password-reset tokens."""
+    try:
+        sessions, reset_tokens = cleanup_expired()
+    except CleanupUnavailable:
+        raise click.ClickException(
+            "Could not clean up expired credentials. "
+            "Check database availability and migrations."
+        ) from None
+    click.echo(f"Deleted {sessions} expired sessions and {reset_tokens} expired reset tokens.")
