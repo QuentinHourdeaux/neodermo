@@ -104,9 +104,10 @@ unwritten knowledge, these docs are incomplete.
   hashes.
 - Required now: `SECRET_KEY`, `DATABASE_URL` (or a documented SQLite path that
   becomes that URL).
-- Optional: `FLASK_DEBUG`. Later work may add an upload directory and an
-  operator credential path. Add them to `.env.example` in the same change that
-  introduces them.
+- Optional: `FLASK_DEBUG`. Later work may add an upload directory and auth/mail
+  settings. Add supported settings to `.env.example` in the change that implements
+  them. Operator provisioning will store a password hash in the database, not
+  a credential file or environment variable; see [authentication.md](authentication.md).
 - Tests must pass with no `.env` present, and must still pass if `.env` points
   at the runtime database. pytest must not create or modify that runtime file.
 - Do not add a second unofficial config channel (`config.local.py`,

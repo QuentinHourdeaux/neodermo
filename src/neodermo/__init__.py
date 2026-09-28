@@ -1,6 +1,7 @@
 """Neodermo application package."""
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,21 +16,30 @@ __version__ = "0.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def create_app(config_name: str | None = None) -> Flask:
+def create_app(
+    config_name: str | None = None,
+    *,
+    test_config: Mapping[str, object] | None = None,
+) -> Flask:
     """Build and return a configured Flask app.
 
     A new app is created each call so tests and the migration CLI do not
-    share one global instance.
+    share one global instance. Testing overrides are applied before extensions
+    initialize, without loading runtime environment configuration.
     """
     name = config_name or os.environ.get("NEODERMO_ENV", "development")
     if name not in CONFIGS:
         raise RuntimeError(f"Unknown config {name!r}. Use development or testing.")
+    if test_config is not None and name != "testing":
+        raise ValueError("test_config requires the testing configuration.")
 
     if name != "testing":
         load_dotenv()
 
     app = Flask(__name__)
     app.config.from_object(CONFIGS[name])
+    if test_config is not None:
+        app.config.from_mapping(test_config)
 
     if name != "testing":
         secret_key = os.environ.get("SECRET_KEY")
