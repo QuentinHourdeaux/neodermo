@@ -11,6 +11,8 @@ _PUBLIC_ENDPOINTS = frozenset({
     ("health.health", "GET"),
     ("auth.session_status", "GET"),
     ("auth.login", "POST"),
+    ("auth.forgot_password", "POST"),
+    ("auth.reset_password", "POST"),
 })
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 

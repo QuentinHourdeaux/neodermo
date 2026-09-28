@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping
 from ipaddress import ip_address
+from math import isfinite
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -61,8 +62,14 @@ def create_app(
         app.config["AUTH_COOKIE_SECURE"] = not (
             os.environ.get("ALLOW_INSECURE_LOOPBACK_COOKIE") == "1"
         )
+        app.config["SMTP_HOST"] = os.environ.get("SMTP_HOST", "127.0.0.1")
+        try:
+            app.config["SMTP_PORT"] = int(os.environ.get("SMTP_PORT", "1025"))
+        except ValueError:
+            raise RuntimeError("SMTP_PORT must be an integer between 1 and 65535.") from None
 
     _validate_auth_config(app, name)
+    _validate_mail_config(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -123,6 +130,21 @@ def _is_loopback(host: str | None) -> bool:
         return bool(host and ip_address(host).is_loopback)
     except ValueError:
         return False
+
+
+def _validate_mail_config(app: Flask) -> None:
+    """Keep development recovery mail on the local capture server."""
+    if not isinstance(app.config["SMTP_HOST"], str) or not _is_loopback(app.config["SMTP_HOST"]):
+        raise RuntimeError("SMTP_HOST must be a loopback address.")
+    port = app.config["SMTP_PORT"]
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise RuntimeError("SMTP_PORT must be an integer between 1 and 65535.")
+    timeout = app.config["SMTP_TIMEOUT_SECONDS"]
+    floor = app.config["RECOVERY_RESPONSE_FLOOR_SECONDS"]
+    if type(timeout) not in (int, float) or not isfinite(timeout) or timeout <= 0:
+        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be positive.")
+    if type(floor) not in (int, float) or not isfinite(floor) or floor < 0:
+        raise RuntimeError("RECOVERY_RESPONSE_FLOOR_SECONDS must be nonnegative.")
 
 
 def _resolve_sqlite_url(database_url: str) -> str:

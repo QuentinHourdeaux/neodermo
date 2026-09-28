@@ -6,9 +6,13 @@ import json
 from flask import Blueprint, g, jsonify, make_response, request
 
 from neodermo.auth.policy import error_response
+from neodermo.auth.recovery import (
+    InvalidResetToken, RecoveryUnavailable,
+    request_recovery, reset_password as complete_password_reset,
+)
 from neodermo.auth.sessions import (
     COOKIE_NAME, clear_session_cookie, issue_session, lookup_session,
-    revoke_session, set_session_cookie,
+    revoke_session, set_session_cookie, token_digest, SessionUnavailable,
 )
 from neodermo.auth.validation import normalize_email
 
@@ -49,18 +53,26 @@ def _object_body(expected: set[str]) -> dict[str, str] | None:
     return value
 
 
-def _login_input() -> tuple[dict[str, str] | None, str | None]:
-    """Parse once so limiter keys and the route use the same bounded input."""
-    if not hasattr(g, "login_input"):
-        body = _object_body({"email", "password"})
+def _email_input(
+    cache_name: str, expected: set[str]
+) -> tuple[dict[str, str] | None, str | None]:
+    """Parse once so an email limit and its route see the same bounded body."""
+    cached = getattr(g, cache_name, None)
+    if cached is None:
+        body = _object_body(expected)
         email = None
         if body is not None:
             try:
                 email = normalize_email(body["email"])
             except (ValueError, UnicodeError):
                 pass
-        g.login_input = body, email
-    return g.login_input
+        cached = body, email
+        setattr(g, cache_name, cached)
+    return cached
+
+
+def _login_input() -> tuple[dict[str, str] | None, str | None]:
+    return _email_input("login_input", {"email", "password"})
 
 
 def login_email_bucket() -> str:
@@ -74,6 +86,36 @@ def login_email_unavailable() -> bool:
     return _login_input()[1] is None
 
 
+def _forgot_input() -> tuple[dict[str, str] | None, str | None]:
+    return _email_input("forgot_input", {"email"})
+
+
+def forgot_email_bucket() -> str:
+    _, email = _forgot_input()
+    return hashlib.sha256(email.encode("ascii")).hexdigest() if email else "invalid"
+
+
+def forgot_email_unavailable() -> bool:
+    return _forgot_input()[1] is None
+
+
+def _reset_input() -> tuple[dict[str, str] | None, str | None]:
+    """Share a validated token digest, never the raw token, with the limiter."""
+    if not hasattr(g, "reset_input"):
+        body = _object_body({"token", "new_password"})
+        digest = token_digest(body["token"]) if body is not None else None
+        g.reset_input = body, digest
+    return g.reset_input
+
+
+def reset_token_bucket() -> str:
+    return _reset_input()[1] or "invalid"
+
+
+def reset_token_unavailable() -> bool:
+    return _reset_input()[1] is None
+
+
 @bp.post("/login")
 def login():
     """Exchange valid credentials for a fresh database session and CSRF token."""
@@ -85,7 +127,10 @@ def login():
     except (ValueError, UnicodeError):
         return error_response("invalid_request", 400)
 
-    issued = issue_session(email, body["password"], request.cookies.get(COOKIE_NAME))
+    try:
+        issued = issue_session(email, body["password"], request.cookies.get(COOKIE_NAME))
+    except SessionUnavailable:
+        return error_response("temporarily_unavailable", 503)
     if issued is None:
         return error_response("invalid_credentials", 401)
     response = make_response(jsonify({
@@ -123,3 +168,32 @@ def logout():
     response = make_response("", 204)
     clear_session_cookie(response)
     return response
+
+
+@bp.post("/forgot-password")
+def forgot_password():
+    """Start mail-only recovery with no account-existence signal in the response."""
+    body, email = _forgot_input()
+    if body is None or email is None:
+        return error_response("invalid_request", 400)
+    request_recovery(email)
+    return jsonify({"message": "If the account exists, recovery instructions will be sent."}), 202
+
+
+@bp.post("/reset-password")
+def reset_password():
+    """Consume a one-time token, change its user's password, and log them out."""
+    body, digest = _reset_input()
+    if body is None:
+        return error_response("invalid_request", 400)
+    if digest is None:
+        return error_response("invalid_reset_token", 400)
+    try:
+        complete_password_reset(body["token"], body["new_password"])
+    except InvalidResetToken:
+        return error_response("invalid_reset_token", 400)
+    except ValueError:
+        return error_response("invalid_request", 400)
+    except RecoveryUnavailable:
+        return error_response("temporarily_unavailable", 503)
+    return "", 204

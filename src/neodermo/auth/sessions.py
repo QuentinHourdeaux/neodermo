@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from flask import Response, current_app, request
 from sqlalchemy import delete, insert, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from neodermo.auth.passwords import verify_password
 from neodermo.auth.validation import normalize_email
@@ -19,6 +20,10 @@ from neodermo.models.types import new_id, utc_now
 
 COOKIE_NAME = "neodermo_session"
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}\Z", re.ASCII)
+
+
+class SessionUnavailable(Exception):
+    """Storage could not complete a login session write."""
 
 
 @dataclass(frozen=True)
@@ -65,7 +70,11 @@ def issue_session(email: str, password: str, previous_token: str | None) -> Issu
     The second password-hash read under BEGIN IMMEDIATE prevents a reset racing
     login from leaving a session authorized by an obsolete password.
     """
-    user = db.session.scalar(select(User).where(User.email == email))
+    try:
+        user = db.session.scalar(select(User).where(User.email == email))
+    except SQLAlchemyError:
+        db.session.remove()
+        raise SessionUnavailable from None
     if not verify_password(user.password_hash if user else None, password):
         return None
     user_id, verified_hash, saved_email = user.id, user.password_hash, user.email
@@ -77,27 +86,30 @@ def issue_session(email: str, password: str, previous_token: str | None) -> Issu
     csrf_token = secrets.token_urlsafe(32)
     digest = hashlib.sha256(raw_token.encode("ascii")).hexdigest()
     old_digest = token_digest(previous_token)
-    with db.engine.begin() as connection:
-        connection.exec_driver_sql("BEGIN IMMEDIATE")
-        if connection.scalar(select(User.password_hash).where(User.id == user_id)) != verified_hash:
-            return None
-        if old_digest is not None:
-            previous_id = connection.scalar(
-                select(AuthSession.id)
-                .join(User, AuthSession.user_id == User.id)
-                .where(
-                    AuthSession.token_digest == old_digest,
-                    AuthSession.expires_at > now,
+    try:
+        with db.engine.begin() as connection:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            if connection.scalar(select(User.password_hash).where(User.id == user_id)) != verified_hash:
+                return None
+            if old_digest is not None:
+                previous_id = connection.scalar(
+                    select(AuthSession.id)
+                    .join(User, AuthSession.user_id == User.id)
+                    .where(
+                        AuthSession.token_digest == old_digest,
+                        AuthSession.expires_at > now,
+                    )
+                )
+                if previous_id is not None:
+                    connection.execute(delete(AuthSession).where(AuthSession.id == previous_id))
+            connection.execute(
+                insert(AuthSession).values(
+                    id=new_id(), token_digest=digest, user_id=user_id,
+                    created_at=now, expires_at=expires_at, csrf_secret=csrf_token,
                 )
             )
-            if previous_id is not None:
-                connection.execute(delete(AuthSession).where(AuthSession.id == previous_id))
-        connection.execute(
-            insert(AuthSession).values(
-                id=new_id(), token_digest=digest, user_id=user_id,
-                created_at=now, expires_at=expires_at, csrf_secret=csrf_token,
-            )
-        )
+    except SQLAlchemyError:
+        raise SessionUnavailable from None
     return IssuedSession(user_id, saved_email, expires_at, raw_token, csrf_token)
 
 

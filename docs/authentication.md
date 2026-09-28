@@ -2,8 +2,9 @@
 
 This document specifies the API-only authentication increment. User, session,
 and reset-token storage, password validation/hashing, and local operator
-provisioning, login, current-session status, logout, and API request protection
-are implemented. Rate limits and password recovery are planned next.
+provisioning, login, current-session status, logout, API request protection,
+rate limits, and password recovery are implemented. Cleanup and full HTTP
+verification remain.
 The test configuration and file-backed fixtures described in
 [development.md](development.md) are available.
 
@@ -90,8 +91,7 @@ Bootstrap refuses a second account. After validation/hashing, a SQLite
 No lock is held while prompting or hashing. Concurrent bootstrap attempts have
 one winner; failures roll back the insert. Lock contention is bounded by the
 SQLite driver's connection timeout and produces a generic operational error.
-Do not manually remove the operator to reset a password; recovery is a later
-milestone of this increment.
+Do not manually remove the operator to reset a password; use recovery below.
 
 The additive auth migration follows the existing domain migration. Users have
 unique normalized emails. Sessions/reset records reference users, store unique
@@ -120,9 +120,8 @@ sessions. Logout deletes the current session and clears the cookie with matching
 scope; replay must fail immediately. Database sessions survive app restarts.
 
 Require authentication by default for `/api` routes. The exact public exceptions
-are `GET /api/health`, `GET /api/auth/session`, and `POST /api/auth/login`.
-Forgot-password and reset-password will be added as public exceptions with
-their endpoints. Current-user status exposes only the session's user;
+are `GET /api/health`, `GET /api/auth/session`, and the login, forgot-password,
+and reset-password POSTs below. Current-user status exposes only the session's user;
 request fields cannot select a different identity.
 
 Every unsafe API request requires an exact match against configured trusted
@@ -145,11 +144,8 @@ operations. All API responses, including errors, receive `Cache-Control: no-stor
 | `POST /api/auth/login` | `email`, `password` | 200 with `authenticated: true` and `csrf_token`, plus a new session cookie. |
 | `GET /api/auth/session` | No account selector | 200 with `authenticated: true`, `user: {id, email}`, and `csrf_token`; otherwise `authenticated: false` without creating a session. A stale cookie may be cleared. |
 | `POST /api/auth/logout` | Valid session, Origin and CSRF headers; no account selector | 204 after revocation. |
-
-Planned recovery endpoints: `POST /api/auth/forgot-password` will accept
-`email` and return the same 202 response for known and unknown valid addresses.
-`POST /api/auth/reset-password` will accept `token` and `new_password` and
-return 204 after revoking that user's sessions and reset tokens.
+| `POST /api/auth/forgot-password` | `email` | 202 with `{"message":"If the account exists, recovery instructions will be sent."}` for known and unknown valid addresses. |
+| `POST /api/auth/reset-password` | `token`, `new_password` | 204 after changing the password and revoking that user's sessions and reset tokens; no automatic login. |
 
 Errors use `{"error":{"code":"..."}}` without submitted values. Health retains
 its existing response shape. Error codes are:
@@ -157,15 +153,14 @@ its existing response shape. Error codes are:
 | Status | Code | Meaning |
 | --- | --- | --- |
 | 400 | `invalid_request` | Malformed/oversized body, invalid fields or values, or unsupported auth request content type. |
+| 400 | `invalid_reset_token` | Unknown, expired, or consumed reset token. |
 | 401 | `invalid_credentials` | Unknown email or wrong password; perform dummy-hash verification for unknown users. |
 | 401 | `unauthenticated` | Protected operation has no valid session. |
 | 403 | `invalid_origin` | Unsafe request has no trusted Origin. |
 | 403 | `invalid_csrf` | Protected mutation has no matching session CSRF token. |
 | 403 | `forbidden` | Authenticated user lacks permission for the operation. |
-| 429 | `rate_limited` | Login limit exceeded; includes `Retry-After` in seconds. |
-
-The planned recovery endpoint will use `invalid_reset_token` for unknown,
-expired, and consumed tokens.
+| 429 | `rate_limited` | Temporary auth limit exceeded; includes `Retry-After` in seconds. |
+| 503 | `temporarily_unavailable` | Login or reset storage could not complete the operation. |
 
 Login has two independent fixed-window limits: 30 requests per minute from the
 connection's remote address and 5 per minute for a normalized email, whether
@@ -178,21 +173,44 @@ local deployment.
 
 [Flask-Limiter](https://flask-limiter.readthedocs.io/en/stable/) uses an
 in-memory store here. Counters reset when the app restarts and do not coordinate
-between workers; run this local deployment as one process. When recovery routes
-are implemented, add their planned independent limits: forgot password 10/hour
+between workers; run this local deployment as one process. Recovery has independent
+limits: forgot password 10/hour
 per address and 3/hour per normalized email; reset password 20/minute per
 address and 5/minute per submitted token digest. Do not accept an email in a
 reset request to select its rate-limit bucket.
 
-Recovery requests must avoid an obvious account-existence timing shortcut.
-Deliver reset credentials only to the provisioned mailbox through a loopback
-SMTP capture inbox, with a separate test outbox. Never return or log the token.
-Requesting recovery does not change the password or revoke sessions. Concurrent
-reset attempts must have only one winner, and a login racing a reset must not
-create a session based on the old password. Send a confirmation after reset.
+Recovery sends only to the provisioned mailbox through loopback SMTP capture.
+It generates comparable message preparation for known and unknown accounts and
+uses a three-second response floor; local Mailpit measurements of three requests
+per branch were 3.003–3.007 seconds (known) and 3.004–3.005 seconds (unknown).
+This mitigates obvious normal-path timing differences, not every SMTP failure
+or system-load difference. A two-second SMTP socket timeout bounds individual
+operations. A valid token is stored only after local SMTP accepts the message;
+failed delivery leaves no usable token. Never return or log the token.
+Requesting recovery does not change the password or revoke sessions.
 
-Before this increment is complete, document and verify the actual local inbox,
-HTTP examples with explicit Origin/CSRF headers, token expiry cleanup, and
+Reset hashing happens before a SQLite `BEGIN IMMEDIATE` write transaction. The
+token is rechecked inside that transaction; one concurrent reset wins, then all
+of that user's reset tokens and sessions are deleted with the password change.
+The login write transaction rechecks the stored hash to avoid an old-password
+session in a race. A confirmation email follows commit; its delivery failure
+does not undo the reset or turn the 204 into an error.
+
+For local capture, install [Mailpit](https://mailpit.axllent.org/) and start it
+with both listeners bound to loopback. Its default temporary database is
+deleted on exit; do not configure SMTP relay or forwarding:
+
+```sh
+mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025 --disable-version-check
+```
+
+Set `SMTP_HOST=127.0.0.1` and `SMTP_PORT=1025` in `.env`, then inspect
+`http://127.0.0.1:8025/`. The mail contains the one-time token and API
+instructions, not a link to a nonexistent recovery page. The app refuses a
+non-loopback SMTP host. Test fixtures use a separate fake outbox.
+
+Before this increment is complete, document full HTTP examples with explicit
+Origin/CSRF headers, token expiry cleanup, and
 credential-free logs. Authentication must be in place before clinical endpoints
 ship. Recovery UI, external mail services, JWT/OAuth, MFA, and multi-user clinical
 authorization are later work.

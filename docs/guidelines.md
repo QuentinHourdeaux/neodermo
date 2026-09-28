@@ -118,8 +118,8 @@ unwritten knowledge, these docs are incomplete.
 - Never commit `.env`, `.venv/`, `var/`, password hashes, or session tokens.
 - Required now: `DATABASE_URL` (or a documented SQLite path that becomes that
   URL). Configure exact `TRUSTED_FRONTEND_ORIGINS` for unsafe requests.
-- Optional: `FLASK_DEBUG`, `SESSION_LIFETIME_SECONDS`, and
-  `ALLOW_INSECURE_LOOPBACK_COOKIE` for local HTTP only. Add supported settings
+- Optional: `FLASK_DEBUG`, `SESSION_LIFETIME_SECONDS`, local `SMTP_HOST` and
+  `SMTP_PORT`, and `ALLOW_INSECURE_LOOPBACK_COOKIE` for local HTTP only. Add supported settings
   to `.env.example` in the change that implements them. Operator provisioning
   stores a password hash in the database, not a credential file or environment
   variable; see [authentication.md](authentication.md).

@@ -67,6 +67,18 @@ def test_insecure_auth_cookie_requires_loopback():
     assert app.config["AUTH_COOKIE_SECURE"] is True
 
 
+@pytest.mark.parametrize("host", ["smtp.example.com", "192.0.2.1", "", 2130706433])
+def test_recovery_mail_must_stay_on_loopback(host):
+    with pytest.raises(RuntimeError, match="SMTP_HOST"):
+        create_app("testing", test_config={"SMTP_HOST": host})
+
+
+@pytest.mark.parametrize("port", [0, 65536, "1025"])
+def test_recovery_mail_rejects_invalid_port(port):
+    with pytest.raises(RuntimeError, match="SMTP_PORT"):
+        create_app("testing", test_config={"SMTP_PORT": port})
+
+
 def test_migrated_data_survives_new_app_and_repeated_upgrade(
     migrated_file_app, file_app_factory
 ):

@@ -41,7 +41,7 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 - Read `DATABASE_URL` and authentication settings from the environment. Commit `.env.example`, never a real `.env`.
 - Runtime SQLite and later private uploads live under `var/`. Do not put care data in `static/` or Git.
 - Tests must use a separate database path. `pytest` must never create or modify the configured runtime database.
-- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Authentication uses email/password login and opaque database sessions; recovery follows later. See [authentication.md](authentication.md). Flask's `SECRET_KEY` is not needed for these database-backed sessions.
+- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Authentication uses email/password login, opaque database sessions, and mail-only recovery. See [authentication.md](authentication.md). Flask's `SECRET_KEY` is not needed for these database-backed sessions.
 - SQLite foreign keys are enabled on every connection. A stay has one patient and one establishment. `start_date` is required; `end_date = NULL` marks an ongoing stay. A partial unique index permits at most one ongoing stay per patient, and a check rejects an end date before its start date.
 - Patient `name` is one required text field. Surrounding whitespace is trimmed, and blank names are rejected.
 - Room, bed, and service are optional free-text context on PatientStay, not separate records or unique assignments. Several patients may have the same establishment, room, and bed. Blank location input is stored as `NULL`.
@@ -102,8 +102,8 @@ applying the additive auth migration. Run
 `.venv/bin/flask --app neodermo:create_app auth bootstrap` in a terminal; see
 [the provisioning guide](authentication.md#local-operator-provisioning).
 It prompts for the mailbox and hidden password and refuses a second account.
-Login, session status, logout, default API protection, and login rate limits are
-implemented. Recovery and its rate limits follow in later steps. For loopback HTTP development,
+Login, session status, logout, default API protection, rate limits, and recovery
+are implemented. For loopback HTTP development,
 set `ALLOW_INSECURE_LOOPBACK_COOKIE=1` and include the exact browser origin in
 `TRUSTED_FRONTEND_ORIGINS`. Keep the default Secure cookie for HTTPS. Every
 unsafe API request needs that exact `Origin`; protected mutations also need the
@@ -111,6 +111,9 @@ unsafe API request needs that exact `Origin`; protected mutations also need the
 [the authentication contract](authentication.md#http-contract).
 If your `.env` predates login support, copy these new settings from
 `.env.example` before trying the browser flow.
+Recovery also needs local Mailpit on `127.0.0.1:1025` for SMTP and
+`127.0.0.1:8025` for the inbox. See
+[the recovery guide](authentication.md#http-contract).
 
 ## Database migrations
 
