@@ -38,10 +38,10 @@ Branch names use a purpose prefix: `feat/`, `doc/`, `fix/`, and similar.
 
 ## Configuration and data
 
-- Read `SECRET_KEY` and `DATABASE_URL` from the environment. Commit `.env.example`, never a real `.env`.
+- Read `DATABASE_URL` and authentication settings from the environment. Commit `.env.example`, never a real `.env`.
 - Runtime SQLite and later private uploads live under `var/`. Do not put care data in `static/` or Git.
 - Tests must use a separate database path. `pytest` must never create or modify the configured runtime database.
-- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Planned authentication uses email/password login, opaque database sessions, recovery, and backend authorization; see [authentication.md](authentication.md). The current `SECRET_KEY` requirement does not determine the session design.
+- Schema changes use Flask-Migrate / Alembic. Do not use `db.create_all()` as the schema story. The first domain migration adds Establishment, Patient, PatientStay, Wound, and Assessment. Authentication uses email/password login and opaque database sessions; recovery follows later. See [authentication.md](authentication.md). Flask's `SECRET_KEY` is not needed for these database-backed sessions.
 - SQLite foreign keys are enabled on every connection. A stay has one patient and one establishment. `start_date` is required; `end_date = NULL` marks an ongoing stay. A partial unique index permits at most one ongoing stay per patient, and a check rejects an end date before its start date.
 - Patient `name` is one required text field. Surrounding whitespace is trimmed, and blank names are rejected.
 - Room, bed, and service are optional free-text context on PatientStay, not separate records or unique assignments. Several patients may have the same establishment, room, and bed. Blank location input is stored as `NULL`.
@@ -62,7 +62,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# replace SECRET_KEY in .env with a local random string
+# review DATABASE_URL and TRUSTED_FRONTEND_ORIGINS in .env
 ```
 
 Then, with the venv still active:
@@ -95,14 +95,22 @@ make migration msg="describe schema change"  # generate and review the migration
 make db-upgrade                    # apply migrations to the configured local database
 ```
 
-`GET /api/health` is the only HTTP contract so far. It reports database connectivity and must not return secrets or paths.
+`GET /api/health` reports database connectivity and must not return secrets or paths.
 
 Local operator provisioning is available after installing dependencies and
 applying the additive auth migration. Run
 `.venv/bin/flask --app neodermo:create_app auth bootstrap` in a terminal; see
 [the provisioning guide](authentication.md#local-operator-provisioning).
 It prompts for the mailbox and hidden password and refuses a second account.
-Login, session handling, and recovery endpoints are not implemented yet.
+Login, session status, logout, and default API protection are implemented.
+Recovery and rate limits follow in later steps. For loopback HTTP development,
+set `ALLOW_INSECURE_LOOPBACK_COOKIE=1` and include the exact browser origin in
+`TRUSTED_FRONTEND_ORIGINS`. Keep the default Secure cookie for HTTPS. Every
+unsafe API request needs that exact `Origin`; protected mutations also need the
+`X-CSRF-Token` returned by login or `GET /api/auth/session`. See
+[the authentication contract](authentication.md#http-contract).
+If your `.env` predates login support, copy these new settings from
+`.env.example` before trying the browser flow.
 
 ## Database migrations
 
@@ -140,7 +148,7 @@ for actual upgrade order. Running `flask db migrate` directly without
 
 `create_app("testing", test_config={...})` applies explicit test configuration
 before SQLAlchemy and Flask-Migrate initialize. It does not load `.env` or use
-runtime `DATABASE_URL`/`SECRET_KEY` values. Overrides are accepted only with the
+runtime `DATABASE_URL` or authentication settings. Overrides are accepted only with the
 testing configuration; they are not a second runtime configuration channel.
 
 The existing `app`/`client` fixtures use in-memory SQLite for lightweight checks.

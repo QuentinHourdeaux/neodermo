@@ -19,10 +19,8 @@ def test_file_test_app_ignores_runtime_environment(
     if runtime_configured:
         runtime_path.write_bytes(b"runtime sentinel")
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{runtime_path}")
-        monkeypatch.setenv("SECRET_KEY", "runtime-secret-must-not-be-used")
     else:
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.setenv("NEODERMO_ENV", "development")
 
     with patch("neodermo.load_dotenv", side_effect=AssertionError("dotenv loaded")):
@@ -33,7 +31,7 @@ def test_file_test_app_ignores_runtime_environment(
 
     assert app.testing
     assert not app.debug
-    assert app.config["SECRET_KEY"] == "test"
+    assert app.config["SECRET_KEY"] is None
     if runtime_configured:
         assert runtime_path.read_bytes() == b"runtime sentinel"
     else:
@@ -44,6 +42,29 @@ def test_test_overrides_cannot_change_runtime_configuration():
     with patch("neodermo.load_dotenv", side_effect=AssertionError("dotenv loaded")):
         with pytest.raises(ValueError, match="requires the testing configuration"):
             create_app("development", test_config={"TESTING": True})
+
+
+@pytest.mark.parametrize("origin", [
+    "*", "null", "http://localhost/path", "http://localhost:bad",
+    "http://[broken", "http://localhost/", "http://localhost#",
+    "http://user@localhost", "http://localhost:0",
+])
+def test_auth_rejects_non_origin_config(origin):
+    with pytest.raises(RuntimeError, match="TRUSTED_FRONTEND_ORIGINS"):
+        create_app("testing", test_config={"TRUSTED_FRONTEND_ORIGINS": (origin,)})
+
+
+def test_insecure_auth_cookie_requires_loopback():
+    with pytest.raises(RuntimeError, match="loopback"):
+        create_app("testing", test_config={
+            "TRUSTED_FRONTEND_ORIGINS": ("http://example.com",),
+            "AUTH_COOKIE_SECURE": False,
+        })
+    app = create_app("testing", test_config={
+        "TRUSTED_FRONTEND_ORIGINS": ("https://example.com",),
+        "AUTH_COOKIE_SECURE": True,
+    })
+    assert app.config["AUTH_COOKIE_SECURE"] is True
 
 
 def test_migrated_data_survives_new_app_and_repeated_upgrade(

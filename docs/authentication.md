@@ -2,8 +2,8 @@
 
 This document specifies the API-only authentication increment. User, session,
 and reset-token storage, password validation/hashing, and local operator
-provisioning are implemented. The application still exposes only `/api/health`;
-auth HTTP endpoints and request enforcement are planned, not implemented yet.
+provisioning, login, current-session status, logout, and API request protection
+are implemented. Rate limits and password recovery are planned next.
 The test configuration and file-backed fixtures described in
 [development.md](development.md) are available.
 
@@ -31,8 +31,8 @@ not a fast token digest. Each session also has an independent random CSRF secret
 
 ## Input limits and validation
 
-Email/password validation is available to provisioning now. HTTP-specific
-enforcement arrives with the auth endpoints. Reject missing/unknown fields, wrong types, non-object JSON,
+Email/password validation is available to provisioning and login. HTTP auth
+requests reject missing/unknown fields, wrong types, non-object JSON,
 malformed Unicode, and oversized input without echoing submitted values.
 
 | Input | Rule |
@@ -57,7 +57,7 @@ Password hashing uses `argon2-cffi==25.1.0` with explicit Argon2id parameters:
 The encoded hash includes the salt and parameters. A five-hash local measurement
 on the development machine had a median of approximately 23 ms; remeasure before
 changing hardware or cost. A random dummy hash is computed once per app instance
-for future unknown-account verification, not once per login attempt.
+for unknown-account verification, not once per login attempt.
 
 The packaged local blocklist is Django 5.2's 19,640-entry snapshot, with source,
 checksum, attribution, and license in
@@ -100,13 +100,13 @@ index user/expiry columns. Deleting a user cascades their credential rows; no
 user-deletion command is exposed. Multiple fictional users are allowed in tests;
 the single-operator restriction belongs to the provisioning operation.
 
-No session or reset credentials are issued by this milestone. Never treat a
-database row alone as an implemented login or recovery flow.
+Provisioning itself issues no session or reset credential. An operator signs in
+through the login endpoint after provisioning.
 
 ## Session and request policy
 
 Default absolute session lifetime is 43,200 seconds (12 hours), configurable
-through the planned `SESSION_LIFETIME_SECONDS` setting. There is no sliding
+through `SESSION_LIFETIME_SECONDS`. There is no sliding
 renewal. Password reset tokens expire after 1,800 seconds (30 minutes).
 
 The cookie is named `neodermo_session`: HttpOnly, SameSite=Lax, Path=/, no Domain,
@@ -120,8 +120,9 @@ sessions. Logout deletes the current session and clears the cookie with matching
 scope; replay must fail immediately. Database sessions survive app restarts.
 
 Require authentication by default for `/api` routes. The exact public exceptions
-are `GET /api/health`, `GET /api/auth/session`, and the login, forgot-password, and
-reset-password POSTs below. Current-user status exposes only the session's user;
+are `GET /api/health`, `GET /api/auth/session`, and `POST /api/auth/login`.
+Forgot-password and reset-password will be added as public exceptions with
+their endpoints. Current-user status exposes only the session's user;
 request fields cannot select a different identity.
 
 Every unsafe API request requires an exact match against configured trusted
@@ -144,8 +145,11 @@ operations. All API responses, including errors, receive `Cache-Control: no-stor
 | `POST /api/auth/login` | `email`, `password` | 200 with `authenticated: true` and `csrf_token`, plus a new session cookie. |
 | `GET /api/auth/session` | No account selector | 200 with `authenticated: true`, `user: {id, email}`, and `csrf_token`; otherwise `authenticated: false` without creating a session. A stale cookie may be cleared. |
 | `POST /api/auth/logout` | Valid session, Origin and CSRF headers; no account selector | 204 after revocation. |
-| `POST /api/auth/forgot-password` | `email` | 202 with `{"message":"If the account exists, recovery instructions will be sent."}` for known and unknown valid addresses. |
-| `POST /api/auth/reset-password` | `token`, `new_password` | 204 after an atomic password change and revocation of all that user's sessions/reset tokens; no automatic login. |
+
+Planned recovery endpoints: `POST /api/auth/forgot-password` will accept
+`email` and return the same 202 response for known and unknown valid addresses.
+`POST /api/auth/reset-password` will accept `token` and `new_password` and
+return 204 after revoking that user's sessions and reset tokens.
 
 Errors use `{"error":{"code":"..."}}` without submitted values. Health retains
 its existing response shape. Error codes are:
@@ -153,13 +157,15 @@ its existing response shape. Error codes are:
 | Status | Code | Meaning |
 | --- | --- | --- |
 | 400 | `invalid_request` | Malformed/oversized body, invalid fields or values, or unsupported auth request content type. |
-| 400 | `invalid_reset_token` | Unknown, expired, or consumed reset token; use one response for all three. |
 | 401 | `invalid_credentials` | Unknown email or wrong password; perform dummy-hash verification for unknown users. |
 | 401 | `unauthenticated` | Protected operation has no valid session. |
 | 403 | `invalid_origin` | Unsafe request has no trusted Origin. |
 | 403 | `invalid_csrf` | Protected mutation has no matching session CSRF token. |
 | 403 | `forbidden` | Authenticated user lacks permission for the operation. |
-| 429 | `rate_limited` | Temporary request limit exceeded; include `Retry-After`. |
+
+The planned recovery endpoint will use `invalid_reset_token` for unknown,
+expired, and consumed tokens. The planned rate limits will use `rate_limited`
+with `Retry-After`.
 
 Login, recovery requests, and reset attempts will have address limits and
 account/token limits using maintained tooling. Apply equivalent rules to known

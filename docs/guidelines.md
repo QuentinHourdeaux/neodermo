@@ -109,20 +109,20 @@ unwritten knowledge, these docs are incomplete.
 
 | Mode                        | How it is selected                          | Database            | Debug | Secrets                            |
 | --------------------------- | ------------------------------------------- | ------------------- | ----- | ---------------------------------- |
-| Local                       | `.env` on the developer machine             | SQLite under `var/` | on    | generated locally, never committed |
-| Test                        | pytest / testing config                     | isolated temp URI   | off   | dummy values in fixtures           |
+| Local                       | `.env` on the developer machine             | SQLite under `var/` | on    | operator hash and sessions in SQLite |
+| Test                        | pytest / testing config                     | isolated temp URI   | off   | fictional values in fixtures       |
 | Packaged / later production | process environment, not a file in an image | `DATABASE_URL`      | off   | injected by the host               |
 
 - Commit `.env.example` with every supported variable, a short comment, and fake
   values.
-- Never commit `.env`, `.venv/`, `var/`, a real `SECRET_KEY`, or later password
-  hashes.
-- Required now: `SECRET_KEY`, `DATABASE_URL` (or a documented SQLite path that
-  becomes that URL).
-- Optional: `FLASK_DEBUG`. Later work may add an upload directory and auth/mail
-  settings. Add supported settings to `.env.example` in the change that implements
-  them. Operator provisioning stores a password hash in the database, not
-  a credential file or environment variable; see [authentication.md](authentication.md).
+- Never commit `.env`, `.venv/`, `var/`, password hashes, or session tokens.
+- Required now: `DATABASE_URL` (or a documented SQLite path that becomes that
+  URL). Configure exact `TRUSTED_FRONTEND_ORIGINS` for unsafe requests.
+- Optional: `FLASK_DEBUG`, `SESSION_LIFETIME_SECONDS`, and
+  `ALLOW_INSECURE_LOOPBACK_COOKIE` for local HTTP only. Add supported settings
+  to `.env.example` in the change that implements them. Operator provisioning
+  stores a password hash in the database, not a credential file or environment
+  variable; see [authentication.md](authentication.md).
 - Tests must pass with no `.env` present, and must still pass if `.env` points
   at the runtime database. pytest must not create or modify that runtime file.
 - Do not add a second unofficial config channel (`config.local.py`,

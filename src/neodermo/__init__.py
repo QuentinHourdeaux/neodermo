@@ -2,7 +2,9 @@
 
 import os
 from collections.abc import Mapping
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from flask import Flask
@@ -42,30 +44,83 @@ def create_app(
         app.config.from_mapping(test_config)
 
     if name != "testing":
-        secret_key = os.environ.get("SECRET_KEY")
         database_url = os.environ.get("DATABASE_URL")
-        if not secret_key or not database_url:
-            raise RuntimeError(
-                "SECRET_KEY and DATABASE_URL must be set. "
-                "Copy .env.example to .env."
-            )
-        app.config["SECRET_KEY"] = secret_key
+        if not database_url:
+            raise RuntimeError("DATABASE_URL must be set. Copy .env.example to .env.")
         app.config["SQLALCHEMY_DATABASE_URI"] = _resolve_sqlite_url(database_url)
+        app.config["TRUSTED_FRONTEND_ORIGINS"] = tuple(
+            origin.strip() for origin in
+            os.environ.get("TRUSTED_FRONTEND_ORIGINS", "http://127.0.0.1:5000").split(",")
+        )
+        try:
+            app.config["SESSION_LIFETIME_SECONDS"] = int(
+                os.environ.get("SESSION_LIFETIME_SECONDS", "43200")
+            )
+        except ValueError:
+            raise RuntimeError("SESSION_LIFETIME_SECONDS must be a positive integer.") from None
+        app.config["AUTH_COOKIE_SECURE"] = not (
+            os.environ.get("ALLOW_INSECURE_LOOPBACK_COOKIE") == "1"
+        )
+
+    _validate_auth_config(app, name)
 
     db.init_app(app)
     migrate.init_app(app, db)
 
     # Import the models package so later table classes register on db.
     from neodermo import models  # noqa: F401
+    from neodermo.api.auth import bp as auth_bp
     from neodermo.api.health import bp as health_bp
     from neodermo.auth.cli import auth_cli
     from neodermo.auth.passwords import init_passwords
+    from neodermo.auth.policy import install_auth_policy
 
     app.register_blueprint(health_bp, url_prefix="/api")
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.cli.add_command(auth_cli)
     init_passwords(app)
+    install_auth_policy(app)
 
     return app
+
+
+def _validate_auth_config(app: Flask, name: str) -> None:
+    """Reject origin/cookie settings that would weaken request protection."""
+    lifetime = app.config["SESSION_LIFETIME_SECONDS"]
+    if type(lifetime) is not int or lifetime <= 0:
+        raise RuntimeError("SESSION_LIFETIME_SECONDS must be a positive integer.")
+    origins = app.config["TRUSTED_FRONTEND_ORIGINS"]
+    if not isinstance(origins, (tuple, list)) or not origins:
+        raise RuntimeError("TRUSTED_FRONTEND_ORIGINS must list exact origins.")
+    for origin in origins:
+        if not isinstance(origin, str) or not origin or origin == "null":
+            raise RuntimeError("TRUSTED_FRONTEND_ORIGINS must list exact origins.")
+        try:
+            parts = urlsplit(origin)
+            port = parts.port
+        except ValueError:
+            raise RuntimeError("TRUSTED_FRONTEND_ORIGINS contains an invalid origin.") from None
+        if (parts.scheme not in ("http", "https") or not parts.hostname or
+                parts.username or parts.password or port == 0 or
+                origin != f"{parts.scheme}://{parts.netloc}"):
+            raise RuntimeError("TRUSTED_FRONTEND_ORIGINS must list exact origins.")
+    if type(app.config["AUTH_COOKIE_SECURE"]) is not bool:
+        raise RuntimeError("AUTH_COOKIE_SECURE must be a boolean.")
+    if not app.config["AUTH_COOKIE_SECURE"]:
+        if name not in ("development", "testing") or any(
+            urlsplit(origin).scheme != "http" or not _is_loopback(urlsplit(origin).hostname)
+            for origin in origins
+        ):
+            raise RuntimeError("Insecure auth cookies require a loopback HTTP origin.")
+
+
+def _is_loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return bool(host and ip_address(host).is_loopback)
+    except ValueError:
+        return False
 
 
 def _resolve_sqlite_url(database_url: str) -> str:
